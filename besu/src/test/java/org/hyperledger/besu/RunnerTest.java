@@ -36,6 +36,7 @@ import org.hyperledger.besu.ethereum.GasLimitCalculator;
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.api.ImmutableApiConfiguration;
 import org.hyperledger.besu.ethereum.api.graphql.GraphQLConfiguration;
+import org.hyperledger.besu.ethereum.api.jsonrpc.ImmutableInProcessRpcConfiguration;
 import org.hyperledger.besu.ethereum.api.jsonrpc.JsonRpcConfiguration;
 import org.hyperledger.besu.ethereum.api.jsonrpc.ipc.JsonRpcIpcConfiguration;
 import org.hyperledger.besu.ethereum.api.jsonrpc.websocket.WebSocketConfiguration;
@@ -211,6 +212,7 @@ public final class RunnerTest {
             .graphQLConfiguration(graphQLConfiguration())
             .webSocketConfiguration(wsRpcConfiguration())
             .jsonRpcIpcConfiguration(new JsonRpcIpcConfiguration())
+            .inProcessRpcConfiguration(ImmutableInProcessRpcConfiguration.builder().build())
             .metricsConfiguration(metricsConfiguration())
             .dataDir(dbAhead)
             .pidPath(pidPath)
@@ -225,8 +227,8 @@ public final class RunnerTest {
       final SynchronizerConfiguration syncConfigBehind =
           SynchronizerConfiguration.builder()
               .syncMode(mode)
-              .fastSyncPivotDistance(5)
-              .fastSyncMinimumPeerCount(1)
+              .syncPivotDistance(5)
+              .syncMinimumPeerCount(1)
               .build();
       final Path dataDirBehind = Files.createTempDirectory(temp, "db-behind");
 

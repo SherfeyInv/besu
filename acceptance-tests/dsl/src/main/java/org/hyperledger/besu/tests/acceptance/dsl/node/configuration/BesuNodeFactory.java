@@ -16,6 +16,8 @@ package org.hyperledger.besu.tests.acceptance.dsl.node.configuration;
 
 import static java.util.Arrays.asList;
 import static java.util.stream.Collectors.toList;
+import static org.hyperledger.besu.ethereum.api.jsonrpc.RpcApis.ADMIN;
+import static org.hyperledger.besu.ethereum.api.jsonrpc.RpcApis.IBFT;
 
 import org.hyperledger.besu.crypto.KeyPair;
 import org.hyperledger.besu.datatypes.Wei;
@@ -30,7 +32,9 @@ import org.hyperledger.besu.ethereum.core.MiningParameters;
 import org.hyperledger.besu.ethereum.core.PrivacyParameters;
 import org.hyperledger.besu.ethereum.permissioning.LocalPermissioningConfiguration;
 import org.hyperledger.besu.ethereum.permissioning.PermissioningConfiguration;
+import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
 import org.hyperledger.besu.pki.keystore.KeyStoreWrapper;
+import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
 import org.hyperledger.besu.tests.acceptance.dsl.node.BesuNode;
 import org.hyperledger.besu.tests.acceptance.dsl.node.Node;
 import org.hyperledger.besu.tests.acceptance.dsl.node.RunnableNode;
@@ -43,6 +47,7 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -64,6 +69,7 @@ public class BesuNodeFactory {
         config.getEngineRpcConfiguration(),
         config.getWebSocketConfiguration(),
         config.getJsonRpcIpcConfiguration(),
+        config.getInProcessRpcConfiguration(),
         config.getMetricsConfiguration(),
         config.getPermissioningConfiguration(),
         config.getApiConfiguration(),
@@ -287,7 +293,8 @@ public class BesuNodeFactory {
       final String enclaveUrl,
       final String authFile,
       final String privTransactionSigningKey,
-      final boolean enableFlexiblePrivacy)
+      final boolean enableFlexiblePrivacy,
+      final boolean enablePrivateNonceAlwaysIncrements)
       throws IOException, URISyntaxException {
     final PrivacyParameters.Builder privacyParametersBuilder = new PrivacyParameters.Builder();
     final PrivacyParameters privacyParameters =
@@ -298,6 +305,7 @@ public class BesuNodeFactory {
             .setStorageProvider(new InMemoryPrivacyStorageProvider())
             .setEnclaveFactory(new EnclaveFactory(Vertx.vertx()))
             .setEnclaveUrl(URI.create(enclaveUrl))
+            .setPrivateNonceAlwaysIncrementsEnabled(enablePrivateNonceAlwaysIncrements)
             .setPrivateKeyPath(
                 Paths.get(ClassLoader.getSystemResource(privTransactionSigningKey).toURI()))
             .build();
@@ -328,12 +336,20 @@ public class BesuNodeFactory {
   }
 
   public BesuNode createPluginsNode(
-      final String name, final List<String> plugins, final List<String> extraCLIOptions)
+      final String name,
+      final List<String> plugins,
+      final List<String> extraCLIOptions,
+      final String... extraRpcApis)
       throws IOException {
+
+    final List<String> enableRpcApis = new ArrayList<>(Arrays.asList(extraRpcApis));
+    enableRpcApis.addAll(List.of(IBFT.name(), ADMIN.name()));
+
     return create(
         new BesuNodeConfigurationBuilder()
             .name(name)
-            .jsonRpcConfiguration(node.createJsonRpcWithIbft2AdminEnabledConfig())
+            .jsonRpcConfiguration(
+                node.createJsonRpcWithRpcApiEnabledConfig(enableRpcApis.toArray(String[]::new)))
             .webSocketConfiguration(node.createWebSocketEnabledConfig())
             .plugins(plugins)
             .extraCLIOptions(extraCLIOptions)
@@ -392,6 +408,7 @@ public class BesuNodeFactory {
             .miningEnabled()
             .jsonRpcConfiguration(node.createJsonRpcWithCliqueEnabledConfig(extraRpcApis))
             .webSocketConfiguration(node.createWebSocketEnabledConfig())
+            .inProcessRpcConfiguration(node.createInProcessRpcConfiguration(extraRpcApis))
             .devMode(false)
             .jsonRpcTxPool()
             .genesisConfigProvider(
@@ -461,7 +478,9 @@ public class BesuNodeFactory {
             .build());
   }
 
-  public BesuNode createIbft2Node(final String name, final boolean fixedPort) throws IOException {
+  public BesuNode createIbft2Node(
+      final String name, final boolean fixedPort, final DataStorageFormat storageFormat)
+      throws IOException {
     JsonRpcConfiguration rpcConfig = node.createJsonRpcWithIbft2EnabledConfig(false);
     rpcConfig.addRpcApi("ADMIN,TXPOOL");
     if (fixedPort) {
@@ -469,6 +488,7 @@ public class BesuNodeFactory {
           Math.abs(name.hashCode() % 60000)
               + 1024); // Generate a consistent port for p2p based on node name
     }
+
     BesuNodeConfigurationBuilder builder =
         new BesuNodeConfigurationBuilder()
             .name(name)
@@ -476,6 +496,10 @@ public class BesuNodeFactory {
             .jsonRpcConfiguration(rpcConfig)
             .webSocketConfiguration(node.createWebSocketEnabledConfig())
             .devMode(false)
+            .dataStorageConfiguration(
+                storageFormat == DataStorageFormat.FOREST
+                    ? DataStorageConfiguration.DEFAULT_FOREST_CONFIG
+                    : DataStorageConfiguration.DEFAULT_BONSAI_CONFIG)
             .genesisConfigProvider(GenesisConfigurationFactory::createIbft2GenesisConfig);
     if (fixedPort) {
       builder.p2pPort(
@@ -512,7 +536,9 @@ public class BesuNodeFactory {
     return createQbftNodeWithTLS(name, KeyStoreWrapper.KEYSTORE_TYPE_PKCS11);
   }
 
-  public BesuNode createQbftNode(final String name, final boolean fixedPort) throws IOException {
+  public BesuNode createQbftNode(
+      final String name, final boolean fixedPort, final DataStorageFormat storageFormat)
+      throws IOException {
     JsonRpcConfiguration rpcConfig = node.createJsonRpcWithQbftEnabledConfig(false);
     rpcConfig.addRpcApi("ADMIN,TXPOOL");
     if (fixedPort) {
@@ -528,6 +554,10 @@ public class BesuNodeFactory {
             .jsonRpcConfiguration(rpcConfig)
             .webSocketConfiguration(node.createWebSocketEnabledConfig())
             .devMode(false)
+            .dataStorageConfiguration(
+                storageFormat == DataStorageFormat.FOREST
+                    ? DataStorageConfiguration.DEFAULT_FOREST_CONFIG
+                    : DataStorageConfiguration.DEFAULT_BONSAI_CONFIG)
             .genesisConfigProvider(GenesisConfigurationFactory::createQbftGenesisConfig);
     if (fixedPort) {
       builder.p2pPort(

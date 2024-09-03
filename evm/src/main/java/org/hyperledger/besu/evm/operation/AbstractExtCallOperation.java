@@ -38,6 +38,8 @@ import org.apache.tuweni.bytes.Bytes;
 public abstract class AbstractExtCallOperation extends AbstractCallOperation {
 
   static final int STACK_TO = 0;
+  static final int STACK_INPUT_OFFSET = 1;
+  static final int STACK_INPUT_LENGTH = 2;
 
   /** EXT*CALL response indicating success */
   public static final Bytes EOF1_SUCCESS_STACK_ITEM = Bytes.EMPTY;
@@ -93,6 +95,11 @@ public abstract class AbstractExtCallOperation extends AbstractCallOperation {
 
   @Override
   public OperationResult execute(final MessageFrame frame, final EVM evm) {
+    Code callingCode = frame.getCode();
+    if (callingCode.getEofVersion() == 0) {
+      return InvalidOperation.INVALID_RESULT;
+    }
+
     final Bytes toBytes = frame.getStackItem(STACK_TO).trimLeadingZeros();
     final Wei value = value(frame);
     final boolean zeroValue = value.isZero();
@@ -139,7 +146,7 @@ public abstract class AbstractExtCallOperation extends AbstractCallOperation {
     frame.clearReturnData();
 
     // delegate calls to prior EOF versions are prohibited
-    if (isDelegate() && frame.getCode().getEofVersion() != code.getEofVersion()) {
+    if (isDelegate() && callingCode.getEofVersion() != code.getEofVersion()) {
       return softFailure(frame, cost);
     }
 
@@ -150,7 +157,7 @@ public abstract class AbstractExtCallOperation extends AbstractCallOperation {
     final Wei balance = (zeroValue || account == null) ? Wei.ZERO : account.getBalance();
 
     // There myst be a minimum gas for a call to have access to.
-    if (childGas < gasCalculator().getMinRetainedGas()) {
+    if (childGas < gasCalculator().getMinCalleeGas()) {
       return softFailure(frame, cost);
     }
     // transferring value you don't have is not a halting exception, just a failure
@@ -195,6 +202,10 @@ public abstract class AbstractExtCallOperation extends AbstractCallOperation {
     return switch (childFrame.getState()) {
       case COMPLETED_SUCCESS -> EOF1_SUCCESS_STACK_ITEM;
       case EXCEPTIONAL_HALT -> EOF1_EXCEPTION_STACK_ITEM;
+      case COMPLETED_FAILED ->
+          childFrame.getExceptionalHaltReason().isPresent()
+              ? EOF1_FAILURE_STACK_ITEM
+              : EOF1_EXCEPTION_STACK_ITEM;
       default -> EOF1_FAILURE_STACK_ITEM;
     };
   }
