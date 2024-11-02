@@ -55,6 +55,8 @@ import org.hyperledger.besu.ethereum.eth.manager.EthProtocolManager;
 import org.hyperledger.besu.ethereum.eth.manager.EthScheduler;
 import org.hyperledger.besu.ethereum.eth.manager.MergePeerFilter;
 import org.hyperledger.besu.ethereum.eth.manager.MonitoredExecutors;
+import org.hyperledger.besu.ethereum.eth.manager.peertask.PeerTaskExecutor;
+import org.hyperledger.besu.ethereum.eth.manager.peertask.PeerTaskRequestSender;
 import org.hyperledger.besu.ethereum.eth.manager.snap.SnapProtocolManager;
 import org.hyperledger.besu.ethereum.eth.peervalidation.CheckpointBlocksPeerValidator;
 import org.hyperledger.besu.ethereum.eth.peervalidation.ClassicForkPeerValidator;
@@ -89,6 +91,7 @@ import org.hyperledger.besu.ethereum.trie.diffbased.common.trielog.TrieLogManage
 import org.hyperledger.besu.ethereum.trie.diffbased.common.trielog.TrieLogPruner;
 import org.hyperledger.besu.ethereum.trie.forest.ForestWorldStateArchive;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
+import org.hyperledger.besu.ethereum.worldstate.DiffBasedSubStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateArchive;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.worldstate.WorldStatePreimageStorage;
@@ -552,6 +555,7 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
     checkNotNull(evmConfiguration, "Missing evm config");
     checkNotNull(networkingConfiguration, "Missing network configuration");
     checkNotNull(dataStorageConfiguration, "Missing data storage configuration");
+    checkNotNull(besuComponent, "Must supply a BesuComponent");
     prepForBuild();
 
     final ProtocolSchedule protocolSchedule = createProtocolSchedule();
@@ -651,6 +655,8 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
     }
 
     final EthContext ethContext = new EthContext(ethPeers, ethMessages, snapMessages, scheduler);
+    final PeerTaskExecutor peerTaskExecutor =
+        new PeerTaskExecutor(ethPeers, new PeerTaskRequestSender(), metricsSystem);
     final boolean fullSyncDisabled = !SyncMode.isFullSync(syncConfig.getSyncMode());
     final SyncState syncState = new SyncState(blockchain, ethPeers, fullSyncDisabled, checkpoint);
 
@@ -702,6 +708,7 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
             worldStateStorageCoordinator,
             protocolContext,
             ethContext,
+            peerTaskExecutor,
             syncState,
             ethProtocolManager,
             pivotBlockSelector);
@@ -716,7 +723,7 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
       ethPeers.snapServerPeersNeeded(false);
     }
 
-    protocolContext.setSynchronizer(Optional.of(synchronizer));
+    protocolContext.setSynchronizer(synchronizer);
 
     final Optional<SnapProtocolManager> maybeSnapProtocolManager =
         createSnapProtocolManager(
@@ -740,15 +747,18 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
     final JsonRpcMethods additionalJsonRpcMethodFactory =
         createAdditionalJsonRpcMethodFactory(protocolContext, protocolSchedule, miningParameters);
 
-    if (dataStorageConfiguration.getBonsaiLimitTrieLogsEnabled()
-        && DataStorageFormat.BONSAI.equals(dataStorageConfiguration.getDataStorageFormat())) {
-      final TrieLogManager trieLogManager =
-          ((BonsaiWorldStateProvider) worldStateArchive).getTrieLogManager();
-      final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage =
-          worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
-      final TrieLogPruner trieLogPruner =
-          createTrieLogPruner(worldStateKeyValueStorage, blockchain, scheduler);
-      trieLogManager.subscribe(trieLogPruner);
+    if (DataStorageFormat.BONSAI.equals(dataStorageConfiguration.getDataStorageFormat())) {
+      final DiffBasedSubStorageConfiguration subStorageConfiguration =
+          dataStorageConfiguration.getDiffBasedSubStorageConfiguration();
+      if (subStorageConfiguration.getLimitTrieLogsEnabled()) {
+        final TrieLogManager trieLogManager =
+            ((BonsaiWorldStateProvider) worldStateArchive).getTrieLogManager();
+        final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage =
+            worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
+        final TrieLogPruner trieLogPruner =
+            createTrieLogPruner(worldStateKeyValueStorage, blockchain, scheduler);
+        trieLogManager.subscribe(trieLogPruner);
+      }
     }
 
     final List<Closeable> closeables = new ArrayList<>();
@@ -802,14 +812,15 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
       final Blockchain blockchain,
       final EthScheduler scheduler) {
     final boolean isProofOfStake = genesisConfigOptions.getTerminalTotalDifficulty().isPresent();
-
+    final DiffBasedSubStorageConfiguration subStorageConfiguration =
+        dataStorageConfiguration.getDiffBasedSubStorageConfiguration();
     final TrieLogPruner trieLogPruner =
         new TrieLogPruner(
             (BonsaiWorldStateKeyValueStorage) worldStateStorage,
             blockchain,
             scheduler::executeServiceTask,
-            dataStorageConfiguration.getBonsaiMaxLayersToLoad(),
-            dataStorageConfiguration.getBonsaiTrieLogPruningWindowSize(),
+            subStorageConfiguration.getMaxLayersToLoad(),
+            subStorageConfiguration.getTrieLogPruningWindowSize(),
             isProofOfStake,
             metricsSystem);
     trieLogPruner.initialize();
@@ -824,6 +835,7 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
    * @param worldStateStorageCoordinator the world state storage
    * @param protocolContext the protocol context
    * @param ethContext the eth context
+   * @param peerTaskExecutor the PeerTaskExecutor
    * @param syncState the sync state
    * @param ethProtocolManager the eth protocol manager
    * @param pivotBlockSelector the pivot block selector
@@ -834,6 +846,7 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
       final WorldStateStorageCoordinator worldStateStorageCoordinator,
       final ProtocolContext protocolContext,
       final EthContext ethContext,
+      final PeerTaskExecutor peerTaskExecutor,
       final SyncState syncState,
       final EthProtocolManager ethProtocolManager,
       final PivotBlockSelector pivotBlockSelector) {
@@ -845,6 +858,7 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
         worldStateStorageCoordinator,
         ethProtocolManager.getBlockBroadcaster(),
         ethContext,
+        peerTaskExecutor,
         syncState,
         dataDirectory,
         storageProvider,
@@ -1091,10 +1105,14 @@ public abstract class BesuControllerBuilder implements MiningParameterOverrides 
       case BONSAI -> {
         final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage =
             worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
+
         yield new BonsaiWorldStateProvider(
             worldStateKeyValueStorage,
             blockchain,
-            Optional.of(dataStorageConfiguration.getBonsaiMaxLayersToLoad()),
+            Optional.of(
+                dataStorageConfiguration
+                    .getDiffBasedSubStorageConfiguration()
+                    .getMaxLayersToLoad()),
             bonsaiCachedMerkleTrieLoader,
             besuComponent.map(BesuComponent::getBesuPluginContext).orElse(null),
             evmConfiguration);

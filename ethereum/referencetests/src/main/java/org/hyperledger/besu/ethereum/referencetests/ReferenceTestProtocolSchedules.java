@@ -34,6 +34,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -105,8 +106,15 @@ public class ReferenceTestProtocolSchedules {
                 Map.entry(
                     "CancunToPragueAtTime15k",
                     createSchedule(genesisStub.clone().cancunTime(0).pragueTime(15000))),
-                Map.entry("Prague", createSchedule(genesisStub.clone().pragueEOFTime(0))),
-                Map.entry("Osaka", createSchedule(genesisStub.clone().futureEipsTime(0))),
+                Map.entry(
+                    "Prague",
+                    createSchedule(
+                        genesisStub
+                            .clone()
+                            .pragueTime(0)
+                            .osakaTime(0) // TODO remove this once osaka_devnet_0 ships
+                        )),
+                Map.entry("Osaka", createSchedule(genesisStub.clone().osakaTime(0))),
                 Map.entry("Amsterdam", createSchedule(genesisStub.clone().futureEipsTime(0))),
                 Map.entry("Bogota", createSchedule(genesisStub.clone().futureEipsTime(0))),
                 Map.entry("Polis", createSchedule(genesisStub.clone().futureEipsTime(0))),
@@ -144,7 +152,7 @@ public class ReferenceTestProtocolSchedules {
   private static ProtocolSchedule createSchedule(final GenesisConfigOptions options) {
     return new ProtocolScheduleBuilder(
             options,
-            CHAIN_ID,
+            Optional.of(CHAIN_ID),
             ProtocolSpecAdapters.create(0, Function.identity()),
             PrivacyParameters.DEFAULT,
             false,

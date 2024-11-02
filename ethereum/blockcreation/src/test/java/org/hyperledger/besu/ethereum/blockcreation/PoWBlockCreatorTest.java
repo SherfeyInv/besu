@@ -39,6 +39,7 @@ import org.hyperledger.besu.ethereum.core.PrivacyParameters;
 import org.hyperledger.besu.ethereum.core.ProcessableBlockHeader;
 import org.hyperledger.besu.ethereum.difficulty.fixed.FixedDifficultyCalculators;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
+import org.hyperledger.besu.ethereum.eth.transactions.BlobCache;
 import org.hyperledger.besu.ethereum.eth.transactions.ImmutableTransactionPoolConfiguration;
 import org.hyperledger.besu.ethereum.eth.transactions.TransactionBroadcaster;
 import org.hyperledger.besu.ethereum.eth.transactions.TransactionPool;
@@ -61,6 +62,7 @@ import org.hyperledger.besu.util.Subscribers;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.util.Collections;
+import java.util.Optional;
 import java.util.function.Function;
 
 import com.google.common.collect.Lists;
@@ -92,7 +94,7 @@ class PoWBlockCreatorTest extends AbstractBlockCreatorTest {
             .protocolSchedule(
                 new ProtocolScheduleBuilder(
                         genesisConfigFile.getConfigOptions(),
-                        BigInteger.valueOf(42),
+                        Optional.of(BigInteger.valueOf(42)),
                         ProtocolSpecAdapters.create(0, Function.identity()),
                         PrivacyParameters.DEFAULT,
                         false,
@@ -122,13 +124,14 @@ class PoWBlockCreatorTest extends AbstractBlockCreatorTest {
             executionContextTestFixture.getProtocolContext(),
             executionContextTestFixture.getProtocolSchedule(),
             solver,
-            executionContextTestFixture.getBlockchain().getChainHeadHeader(),
             ethScheduler);
 
     // A Hashrate should not exist in the block creator prior to creating a block
     assertThat(blockCreator.getHashesPerSecond()).isNotPresent();
 
-    final BlockCreationResult blockResult = blockCreator.createBlock(BLOCK_1_TIMESTAMP);
+    final BlockCreationResult blockResult =
+        blockCreator.createBlock(
+            BLOCK_1_TIMESTAMP, executionContextTestFixture.getBlockchain().getChainHeadHeader());
     final Block actualBlock = blockResult.getBlock();
     final Block expectedBlock = ValidationTestUtils.readBlock(1);
 
@@ -150,7 +153,7 @@ class PoWBlockCreatorTest extends AbstractBlockCreatorTest {
             .protocolSchedule(
                 new ProtocolScheduleBuilder(
                         genesisConfigFile.getConfigOptions(),
-                        BigInteger.valueOf(42),
+                        Optional.of(BigInteger.valueOf(42)),
                         ProtocolSpecAdapters.create(
                             0,
                             specBuilder ->
@@ -185,10 +188,13 @@ class PoWBlockCreatorTest extends AbstractBlockCreatorTest {
             executionContextTestFixture.getProtocolContext(),
             executionContextTestFixture.getProtocolSchedule(),
             solver,
-            executionContextTestFixture.getBlockchain().getChainHeadHeader(),
             ethScheduler);
 
-    assertThat(blockCreator.createBlock(BLOCK_1_TIMESTAMP)).isNotNull();
+    assertThat(
+            blockCreator.createBlock(
+                BLOCK_1_TIMESTAMP,
+                executionContextTestFixture.getBlockchain().getChainHeadHeader()))
+        .isNotNull();
     // If we weren't setting difficulty to 2^256-1 a difficulty of 1 would have caused a
     // IllegalArgumentException at the previous line, as 2^256 is 33 bytes.
   }
@@ -203,7 +209,7 @@ class PoWBlockCreatorTest extends AbstractBlockCreatorTest {
     ProtocolSchedule protocolSchedule =
         new ProtocolScheduleBuilder(
                 genesisConfigFile.getConfigOptions(),
-                BigInteger.valueOf(42),
+                Optional.of(BigInteger.valueOf(42)),
                 ProtocolSpecAdapters.create(
                     0,
                     specBuilder ->
@@ -241,7 +247,6 @@ class PoWBlockCreatorTest extends AbstractBlockCreatorTest {
             executionContextTestFixture.getProtocolContext(),
             executionContextTestFixture.getProtocolSchedule(),
             solver,
-            executionContextTestFixture.getBlockchain().getChainHeadHeader(),
             ethScheduler);
 
     final MutableWorldState mutableWorldState =
@@ -281,7 +286,7 @@ class PoWBlockCreatorTest extends AbstractBlockCreatorTest {
     ProtocolSchedule protocolSchedule =
         new ProtocolScheduleBuilder(
                 genesisConfigFile.getConfigOptions(),
-                BigInteger.valueOf(42),
+                Optional.of(BigInteger.valueOf(42)),
                 ProtocolSpecAdapters.create(
                     0,
                     specBuilder ->
@@ -319,7 +324,6 @@ class PoWBlockCreatorTest extends AbstractBlockCreatorTest {
             executionContextTestFixture.getProtocolContext(),
             executionContextTestFixture.getProtocolSchedule(),
             solver,
-            executionContextTestFixture.getBlockchain().getChainHeadHeader(),
             ethScheduler);
 
     final MutableWorldState mutableWorldState =
@@ -371,7 +375,8 @@ class PoWBlockCreatorTest extends AbstractBlockCreatorTest {
             mock(TransactionBroadcaster.class),
             ethContext,
             new TransactionPoolMetrics(metricsSystem),
-            poolConf);
+            poolConf,
+            new BlobCache());
     transactionPool.setEnabled();
 
     return transactionPool;

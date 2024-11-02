@@ -158,14 +158,15 @@ class MainnetGenesisFileModule extends GenesisFileModule {
         Map.entry(
             "prague",
             createSchedule(
-                new StubGenesisConfigOptions().pragueTime(0).baseFeePerGas(0x0a).chainId(chainId))),
-        Map.entry(
-            "pragueeof",
-            createSchedule(
                 new StubGenesisConfigOptions()
-                    .pragueEOFTime(0)
+                    .pragueTime(0)
+                    .osakaTime(0) // TODO remove this once osaka_devnet_0 launches
                     .baseFeePerGas(0x0a)
                     .chainId(chainId))),
+        Map.entry(
+            "osaka",
+            createSchedule(
+                new StubGenesisConfigOptions().osakaTime(0).baseFeePerGas(0x0a).chainId(chainId))),
         Map.entry(
             "futureeips",
             createSchedule(
@@ -186,7 +187,7 @@ class MainnetGenesisFileModule extends GenesisFileModule {
     return () ->
         new ProtocolScheduleBuilder(
                 options,
-                options.getChainId().orElse(BigInteger.ONE),
+                options.getChainId(),
                 ProtocolSpecAdapters.create(0, Function.identity()),
                 PrivacyParameters.DEFAULT,
                 false,

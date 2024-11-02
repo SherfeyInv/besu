@@ -31,6 +31,7 @@ import org.hyperledger.besu.ethereum.core.MiningParameters;
 import org.hyperledger.besu.ethereum.core.PrivacyParameters;
 import org.hyperledger.besu.ethereum.core.ProcessableBlockHeader;
 import org.hyperledger.besu.ethereum.core.Transaction;
+import org.hyperledger.besu.ethereum.eth.transactions.BlobCache;
 import org.hyperledger.besu.ethereum.eth.transactions.ImmutableTransactionPoolConfiguration;
 import org.hyperledger.besu.ethereum.eth.transactions.PendingTransactions;
 import org.hyperledger.besu.ethereum.eth.transactions.TransactionBroadcaster;
@@ -50,6 +51,7 @@ import org.hyperledger.besu.util.number.Fraction;
 
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Optional;
 import java.util.function.Function;
 
 import org.junit.jupiter.api.Test;
@@ -66,7 +68,7 @@ public class LondonFeeMarketBlockTransactionSelectorTest
   protected ProtocolSchedule createProtocolSchedule() {
     return new ProtocolScheduleBuilder(
             genesisConfigFile.getConfigOptions(),
-            CHAIN_ID,
+            Optional.of(CHAIN_ID),
             ProtocolSpecAdapters.create(0, Function.identity()),
             new PrivacyParameters(),
             false,
@@ -101,7 +103,8 @@ public class LondonFeeMarketBlockTransactionSelectorTest
             mock(TransactionBroadcaster.class),
             ethContext,
             new TransactionPoolMetrics(metricsSystem),
-            poolConf);
+            poolConf,
+            new BlobCache());
     transactionPool.setEnabled();
     return transactionPool;
   }
