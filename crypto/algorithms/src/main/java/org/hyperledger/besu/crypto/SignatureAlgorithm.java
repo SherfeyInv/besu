@@ -20,6 +20,7 @@ import java.util.function.UnaryOperator;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
+import org.bouncycastle.crypto.params.ECDomainParameters;
 import org.bouncycastle.math.ec.ECPoint;
 
 /** The interface Signature algorithm. */
@@ -55,7 +56,7 @@ public interface SignatureAlgorithm {
   SECPSignature sign(final Bytes32 dataHash, final KeyPair keyPair);
 
   /**
-   * Verify given data.
+   * Verify given message digest data, signature and public key.
    *
    * @param data the data
    * @param signature the signature
@@ -63,6 +64,21 @@ public interface SignatureAlgorithm {
    * @return the boolean
    */
   boolean verify(final Bytes data, final SECPSignature signature, final SECPPublicKey pub);
+
+  /**
+   * Verify given message digest data, signature and public key, allowing for malleable signatures.
+   *
+   * @param data the data
+   * @param signature the signature
+   * @param pub the pub
+   * @return the boolean
+   */
+  default boolean verifyMalleable(
+      final Bytes data, final SECPSignature signature, final SECPPublicKey pub) {
+    throw new UnsupportedOperationException(
+        "Malleable signatures are not supported for this curve " + getCurveName());
+  }
+  ;
 
   /**
    * Verify given data.
@@ -123,6 +139,13 @@ public interface SignatureAlgorithm {
    * @return the curve name
    */
   String getCurveName();
+
+  /**
+   * Bouncy castle ECDomainParameters representing the curve.
+   *
+   * @return instance of ECDomainParameters
+   */
+  ECDomainParameters getCurve();
 
   /**
    * Create secp private key.
@@ -224,7 +247,7 @@ public interface SignatureAlgorithm {
    * @return the code delegation signature
    */
   CodeDelegationSignature createCodeDelegationSignature(
-      final BigInteger r, final BigInteger s, final BigInteger yParity);
+      final BigInteger r, final BigInteger s, final byte yParity);
 
   /**
    * Decode secp signature.

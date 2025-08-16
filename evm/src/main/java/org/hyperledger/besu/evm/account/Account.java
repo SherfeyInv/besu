@@ -16,10 +16,7 @@ package org.hyperledger.besu.evm.account;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Wei;
-
-import java.util.Optional;
-
-import org.apache.tuweni.bytes.Bytes;
+import org.hyperledger.besu.evm.internal.CodeCache;
 
 /**
  * A world state account.
@@ -55,29 +52,11 @@ public interface Account extends AccountState {
   boolean isStorageEmpty();
 
   /**
-   * Returns the address of the delegated code account if it has one.
+   * Gets the code cache.
    *
-   * @return the address of the delegated code account if it has one otherwise empty.
+   * @return the code cache, or null if not supported
    */
-  default Optional<Address> delegatedCodeAddress() {
-    return Optional.empty();
-  }
-
-  /**
-   * Returns a boolean to indicate if the account has delegated code.
-   *
-   * @return true if the account has delegated code otherwise false.
-   */
-  default boolean hasDelegatedCode() {
-    return false;
-  }
-
-  /**
-   * Returns the code as it is stored in the trie even if it's a delegated code account.
-   *
-   * @return the code as it is stored in the trie.
-   */
-  default Bytes getUnprocessedCode() {
-    return getCode();
+  default CodeCache getCodeCache() {
+    return null;
   }
 }

@@ -17,7 +17,9 @@ package org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods.engine;
 import static java.util.Collections.emptyList;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.api.graphql.internal.response.GraphQLError.INVALID_PARAMS;
+import static org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods.engine.EngineTestSupport.fromErrorResp;
 import static org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.RpcErrorType.INVALID_EXECUTION_REQUESTS_PARAMS;
+import static org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.RpcErrorType.UNSUPPORTED_FORK;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -35,18 +37,23 @@ import org.hyperledger.besu.ethereum.api.jsonrpc.internal.JsonRpcRequestContext;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.parameters.EnginePayloadParameter;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcError;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcResponse;
+import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.RpcErrorType;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
 import org.hyperledger.besu.ethereum.core.Request;
 import org.hyperledger.besu.ethereum.core.Withdrawal;
 import org.hyperledger.besu.ethereum.mainnet.BodyValidation;
+import org.hyperledger.besu.ethereum.mainnet.ScheduledProtocolSpec;
+import org.hyperledger.besu.ethereum.mainnet.ValidationResult;
 import org.hyperledger.besu.ethereum.mainnet.requests.MainnetRequestsValidator;
 import org.hyperledger.besu.ethereum.mainnet.requests.ProhibitedRequestValidator;
 import org.hyperledger.besu.evm.gascalculator.PragueGasCalculator;
+import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
@@ -60,10 +67,20 @@ public class EngineNewPayloadV4Test extends EngineNewPayloadV3Test {
 
   public EngineNewPayloadV4Test() {}
 
+  @Override
+  protected Set<ScheduledProtocolSpec.Hardfork> supportedHardforks() {
+    return Set.of(pragueHardfork);
+  }
+
   private static final List<Request> VALID_REQUESTS =
       List.of(
           new Request(RequestType.DEPOSIT, Bytes.of(1)),
           new Request(RequestType.WITHDRAWAL, Bytes.of(1)),
+          new Request(RequestType.CONSOLIDATION, Bytes.of(1)));
+
+  private static final List<Request> INVALID_REQUESTS_DUPLICATES =
+      List.of(
+          new Request(RequestType.CONSOLIDATION, Bytes.of(1)),
           new Request(RequestType.CONSOLIDATION, Bytes.of(1)));
 
   @BeforeEach
@@ -78,7 +95,8 @@ public class EngineNewPayloadV4Test extends EngineNewPayloadV3Test {
             protocolContext,
             mergeCoordinator,
             ethPeers,
-            engineCallListener);
+            engineCallListener,
+            new NoOpMetricsSystem());
     lenient().when(protocolSchedule.hardforkFor(any())).thenReturn(Optional.of(pragueHardfork));
     lenient().when(protocolSpec.getGasCalculator()).thenReturn(new PragueGasCalculator());
     mockAllowedRequestsValidator();
@@ -89,11 +107,48 @@ public class EngineNewPayloadV4Test extends EngineNewPayloadV3Test {
     assertThat(method.getName()).isEqualTo("engine_newPayloadV4");
   }
 
+  @Override
+  public void shouldReturnUnsupportedForkIfBlockTimestampIsAfterPragueMilestone() {
+    // Only relevant for V3
+  }
+
+  @Test
+  public void shouldReturnUnsupportedForkIfBlockTimestampIsBeforePragueMilestone() {
+    final BlockHeader cancunHeader = createBlockHeaderFixtureForV3(Optional.empty()).buildHeader();
+
+    var resp = resp(mockEnginePayload(cancunHeader, emptyList()));
+
+    final JsonRpcError jsonRpcError = fromErrorResp(resp);
+    assertThat(jsonRpcError.getCode()).isEqualTo(UNSUPPORTED_FORK.getCode());
+    verify(engineCallListener, times(1)).executionEngineCalled();
+  }
+
   @Test
   public void shouldReturnInvalidIfRequestsIsNull_WhenRequestsAllowed() {
     var resp =
         respWithInvalidRequests(
             mockEnginePayload(createValidBlockHeaderForV4(Optional.empty()), emptyList()));
+
+    assertThat(fromErrorResp(resp).getCode()).isEqualTo(INVALID_PARAMS.getCode());
+    assertThat(fromErrorResp(resp).getMessage())
+        .isEqualTo(INVALID_EXECUTION_REQUESTS_PARAMS.getMessage());
+    verify(engineCallListener, times(1)).executionEngineCalled();
+  }
+
+  @Test
+  public void shouldReturnInvalidIfRequestsInvalidWithDuplicates() {
+    BlockHeader mockHeader =
+        setupValidPayload(
+            new BlockProcessingResult(
+                Optional.of(
+                    new BlockProcessingOutputs(
+                        null, List.of(), Optional.of(INVALID_REQUESTS_DUPLICATES)))),
+            Optional.empty());
+    when(blockchain.getBlockHeader(mockHeader.getParentHash()))
+        .thenReturn(Optional.of(mock(BlockHeader.class)));
+    when(mergeCoordinator.getLatestValidAncestor(mockHeader))
+        .thenReturn(Optional.of(mockHeader.getHash()));
+    var resp = respWithInvalidDuplicateRequests(mockEnginePayload(mockHeader, emptyList()));
 
     assertThat(fromErrorResp(resp).getCode()).isEqualTo(INVALID_PARAMS.getCode());
     assertThat(fromErrorResp(resp).getMessage())
@@ -129,10 +184,47 @@ public class EngineNewPayloadV4Test extends EngineNewPayloadV3Test {
     verify(engineCallListener, times(1)).executionEngineCalled();
   }
 
+  @Override
+  @Test
+  public void validateVersionedHash_whenListIsPresentAndEmpty() {
+    final BlockHeader mockHeader =
+        setupValidPayload(
+            new BlockProcessingResult(Optional.of(new BlockProcessingOutputs(null, List.of()))),
+            Optional.empty());
+    final EnginePayloadParameter payload = mockEnginePayload(mockHeader, emptyList(), null);
+
+    ValidationResult<RpcErrorType> res =
+        method.validateParameters(
+            payload,
+            Optional.of(List.of()),
+            Optional.of("0x0000000000000000000000000000000000000000000000000000000000000000"),
+            Optional.of(List.of()));
+    assertThat(res.isValid()).isTrue();
+  }
+
+  @Override
+  @Test
+  public void validateExecutionRequests_whenPresent() {
+    final BlockHeader mockHeader =
+        setupValidPayload(
+            new BlockProcessingResult(Optional.of(new BlockProcessingOutputs(null, List.of()))),
+            Optional.empty());
+    final EnginePayloadParameter payload = mockEnginePayload(mockHeader, emptyList(), null);
+
+    ValidationResult<RpcErrorType> res =
+        method.validateParameters(
+            payload,
+            Optional.of(List.of()),
+            Optional.of("0x0000000000000000000000000000000000000000000000000000000000000000"),
+            Optional.of(emptyList()));
+    assertThat(res.isValid()).isTrue();
+  }
+
   private BlockHeader createValidBlockHeaderForV4(
       final Optional<List<Withdrawal>> maybeWithdrawals) {
     return createBlockHeaderFixtureForV3(maybeWithdrawals)
         .requestsHash(BodyValidation.requestsHash(VALID_REQUESTS))
+        .timestamp(pragueHardfork.milestone())
         .buildHeader();
   }
 
@@ -141,7 +233,7 @@ public class EngineNewPayloadV4Test extends EngineNewPayloadV3Test {
     BlockHeader parentBlockHeader =
         new BlockHeaderTestFixture()
             .baseFeePerGas(Wei.ONE)
-            .timestamp(pragueHardfork.milestone())
+            .timestamp(pragueHardfork.milestone() - 2) // cancun parent
             .excessBlobGas(BlobGas.ZERO)
             .blobGasUsed(0L)
             .buildHeader();
@@ -168,7 +260,10 @@ public class EngineNewPayloadV4Test extends EngineNewPayloadV3Test {
     final List<String> requestsWithoutRequestId =
         VALID_REQUESTS.stream()
             .sorted(Comparator.comparing(Request::getType))
-            .map(r -> r.getData().toHexString())
+            .map(
+                r ->
+                    Bytes.concatenate(Bytes.of(r.getType().getSerializedType()), r.getData())
+                        .toHexString())
             .toList();
     Object[] params =
         maybeParentBeaconBlockRoot
@@ -189,6 +284,26 @@ public class EngineNewPayloadV4Test extends EngineNewPayloadV3Test {
                 bytes32 ->
                     new Object[] {payload, emptyList(), bytes32.toHexString()
                       // empty requests param is invalid
+                    })
+            .orElseGet(() -> new Object[] {payload});
+    return method.response(
+        new JsonRpcRequestContext(new JsonRpcRequest("2.0", this.method.getName(), params)));
+  }
+
+  protected JsonRpcResponse respWithInvalidDuplicateRequests(final EnginePayloadParameter payload) {
+    final List<String> requestsWithoutRequestId =
+        INVALID_REQUESTS_DUPLICATES.stream() // don't sort them
+            .map(
+                r ->
+                    Bytes.concatenate(Bytes.of(r.getType().getSerializedType()), r.getData())
+                        .toHexString())
+            .toList();
+    Object[] params =
+        maybeParentBeaconBlockRoot
+            .map(
+                bytes32 ->
+                    new Object[] {
+                      payload, emptyList(), bytes32.toHexString(), requestsWithoutRequestId
                     })
             .orElseGet(() -> new Object[] {payload});
     return method.response(

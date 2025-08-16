@@ -15,7 +15,6 @@
 package org.hyperledger.besu.ethereum.blockcreation;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.hyperledger.besu.ethereum.mainnet.requests.RequestContractAddresses.DEFAULT_DEPOSIT_CONTRACT_ADDRESS;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
@@ -24,14 +23,13 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import org.hyperledger.besu.config.GenesisConfigFile;
+import org.hyperledger.besu.config.GenesisConfig;
 import org.hyperledger.besu.crypto.KeyPair;
 import org.hyperledger.besu.crypto.SECPPrivateKey;
 import org.hyperledger.besu.crypto.SignatureAlgorithm;
 import org.hyperledger.besu.crypto.SignatureAlgorithmFactory;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.BlobGas;
-import org.hyperledger.besu.datatypes.BlobsWithCommitments;
 import org.hyperledger.besu.datatypes.GWei;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.RequestType;
@@ -47,16 +45,16 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderBuilder;
 import org.hyperledger.besu.ethereum.core.Difficulty;
 import org.hyperledger.besu.ethereum.core.ExecutionContextTestFixture;
-import org.hyperledger.besu.ethereum.core.ImmutableMiningParameters;
-import org.hyperledger.besu.ethereum.core.ImmutableMiningParameters.MutableInitValues;
-import org.hyperledger.besu.ethereum.core.MiningParameters;
-import org.hyperledger.besu.ethereum.core.PrivacyParameters;
+import org.hyperledger.besu.ethereum.core.ImmutableMiningConfiguration;
+import org.hyperledger.besu.ethereum.core.ImmutableMiningConfiguration.MutableInitValues;
+import org.hyperledger.besu.ethereum.core.MiningConfiguration;
 import org.hyperledger.besu.ethereum.core.Request;
 import org.hyperledger.besu.ethereum.core.SealableBlockHeader;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 import org.hyperledger.besu.ethereum.core.TransactionTestFixture;
 import org.hyperledger.besu.ethereum.core.Withdrawal;
+import org.hyperledger.besu.ethereum.core.kzg.BlobsWithCommitments;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.EthScheduler;
 import org.hyperledger.besu.ethereum.eth.transactions.BlobCache;
@@ -77,8 +75,10 @@ import org.hyperledger.besu.ethereum.mainnet.TransactionValidatorFactory;
 import org.hyperledger.besu.ethereum.mainnet.ValidationResult;
 import org.hyperledger.besu.ethereum.mainnet.WithdrawalsProcessor;
 import org.hyperledger.besu.ethereum.mainnet.requests.DepositRequestProcessor;
-import org.hyperledger.besu.ethereum.mainnet.requests.ProcessRequestContext;
+import org.hyperledger.besu.ethereum.mainnet.requests.RequestProcessingContext;
+import org.hyperledger.besu.ethereum.mainnet.systemcall.BlockProcessingContext;
 import org.hyperledger.besu.ethereum.transaction.TransactionInvalidReason;
+import org.hyperledger.besu.ethereum.util.TrustedSetupClassLoaderExtension;
 import org.hyperledger.besu.evm.account.Account;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.evm.log.Log;
@@ -101,8 +101,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-@ExtendWith(MockitoExtension.class)
-abstract class AbstractBlockCreatorTest {
+@ExtendWith({MockitoExtension.class})
+class AbstractBlockCreatorTest extends TrustedSetupClassLoaderExtension {
   private static final Supplier<SignatureAlgorithm> SIGNATURE_ALGORITHM =
       Suppliers.memoize(SignatureAlgorithmFactory::getInstance);
   private static final SECPPrivateKey PRIVATE_KEY1 =
@@ -116,6 +116,9 @@ abstract class AbstractBlockCreatorTest {
 
   @Mock private WithdrawalsProcessor withdrawalsProcessor;
   protected EthScheduler ethScheduler = new DeterministicEthScheduler();
+
+  public static final Address DEFAULT_DEPOSIT_CONTRACT_ADDRESS =
+      Address.fromHexString("0x00000000219ab540356cbb839cbe05303d7705fa");
 
   @Test
   void findDepositRequestsFromReceipts() {
@@ -142,7 +145,9 @@ abstract class AbstractBlockCreatorTest {
 
     var depositRequestsFromReceipts =
         new DepositRequestProcessor(DEFAULT_DEPOSIT_CONTRACT_ADDRESS)
-            .process(new ProcessRequestContext(null, null, null, receipts, null, null));
+            .process(
+                new RequestProcessingContext(
+                    new BlockProcessingContext(null, null, null, null, null), receipts));
     assertThat(depositRequestsFromReceipts).isEqualTo(expectedDepositRequest);
   }
 
@@ -298,18 +303,17 @@ abstract class AbstractBlockCreatorTest {
 
   private CreateOn createBlockCreator(final ProtocolSpecAdapters protocolSpecAdapters) {
 
-    final var genesisConfigFile = GenesisConfigFile.fromResource("/block-creation-genesis.json");
+    final var genesisConfig = GenesisConfig.fromResource("/block-creation-genesis.json");
     final ExecutionContextTestFixture executionContextTestFixture =
-        ExecutionContextTestFixture.builder(genesisConfigFile)
+        ExecutionContextTestFixture.builder(genesisConfig)
             .protocolSchedule(
                 new ProtocolScheduleBuilder(
-                        genesisConfigFile.getConfigOptions(),
+                        genesisConfig.getConfigOptions(),
                         Optional.of(BigInteger.valueOf(42)),
                         protocolSpecAdapters,
-                        PrivacyParameters.DEFAULT,
                         false,
                         EvmConfiguration.DEFAULT,
-                        MiningParameters.MINING_DISABLED,
+                        MiningConfiguration.MINING_DISABLED,
                         new BadBlockManager(),
                         false,
                         new NoOpMetricsSystem())
@@ -342,8 +346,8 @@ abstract class AbstractBlockCreatorTest {
             new BlobCache());
     transactionPool.setEnabled();
 
-    final MiningParameters miningParameters =
-        ImmutableMiningParameters.builder()
+    final MiningConfiguration miningConfiguration =
+        ImmutableMiningConfiguration.builder()
             .mutableInitValues(
                 MutableInitValues.builder()
                     .extraData(Bytes.fromHexString("deadbeef"))
@@ -355,8 +359,8 @@ abstract class AbstractBlockCreatorTest {
 
     return new CreateOn(
         new TestBlockCreator(
-            miningParameters,
-            __ -> Address.ZERO,
+            miningConfiguration,
+            (__, ___) -> Address.ZERO,
             __ -> Bytes.fromHexString("deadbeef"),
             transactionPool,
             executionContextTestFixture.getProtocolContext(),
@@ -368,7 +372,7 @@ abstract class AbstractBlockCreatorTest {
   static class TestBlockCreator extends AbstractBlockCreator {
 
     protected TestBlockCreator(
-        final MiningParameters miningParameters,
+        final MiningConfiguration miningConfiguration,
         final MiningBeneficiaryCalculator miningBeneficiaryCalculator,
         final ExtraDataCalculator extraDataCalculator,
         final TransactionPool transactionPool,
@@ -376,7 +380,7 @@ abstract class AbstractBlockCreatorTest {
         final ProtocolSchedule protocolSchedule,
         final EthScheduler ethScheduler) {
       super(
-          miningParameters,
+          miningConfiguration,
           miningBeneficiaryCalculator,
           extraDataCalculator,
           transactionPool,

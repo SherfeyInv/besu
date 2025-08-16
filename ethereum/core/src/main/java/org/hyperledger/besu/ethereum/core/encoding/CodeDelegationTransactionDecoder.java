@@ -20,15 +20,18 @@ import org.hyperledger.besu.crypto.SignatureAlgorithmFactory;
 import org.hyperledger.besu.datatypes.AccessListEntry;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.CodeDelegation;
+import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.TransactionType;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.core.Transaction;
+import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.rlp.RLPInput;
 
 import java.math.BigInteger;
 import java.util.function.Supplier;
 
 import com.google.common.base.Suppliers;
+import org.apache.tuweni.bytes.Bytes;
 
 public class CodeDelegationTransactionDecoder {
   private static final Supplier<SignatureAlgorithm> SIGNATURE_ALGORITHM =
@@ -38,22 +41,24 @@ public class CodeDelegationTransactionDecoder {
     // private constructor
   }
 
-  public static Transaction decode(final RLPInput input) {
-    input.enterList();
-    final BigInteger chainId = input.readBigIntegerScalar();
+  public static Transaction decode(final Bytes input) {
+    final RLPInput txRlp = RLP.input(input.slice(1)); // Skip the transaction type byte
+    txRlp.enterList();
+    final BigInteger chainId = txRlp.readBigIntegerScalar();
     final Transaction.Builder builder =
         Transaction.builder()
             .type(TransactionType.DELEGATE_CODE)
             .chainId(chainId)
-            .nonce(input.readLongScalar())
-            .maxPriorityFeePerGas(Wei.of(input.readUInt256Scalar()))
-            .maxFeePerGas(Wei.of(input.readUInt256Scalar()))
-            .gasLimit(input.readLongScalar())
-            .to(input.readBytes(v -> v.isEmpty() ? null : Address.wrap(v)))
-            .value(Wei.of(input.readUInt256Scalar()))
-            .payload(input.readBytes())
+            .nonce(txRlp.readLongScalar())
+            .maxPriorityFeePerGas(Wei.of(txRlp.readUInt256Scalar()))
+            .maxFeePerGas(Wei.of(txRlp.readUInt256Scalar()))
+            .gasLimit(txRlp.readLongScalar())
+            .to(txRlp.readBytes(v -> v.isEmpty() ? null : Address.wrap(v)))
+            .value(Wei.of(txRlp.readUInt256Scalar()))
+            .payload(txRlp.readBytes())
+            .rawRlp(txRlp.raw())
             .accessList(
-                input.readList(
+                txRlp.readList(
                     accessListEntryRLPInput -> {
                       accessListEntryRLPInput.enterList();
                       final AccessListEntry accessListEntry =
@@ -63,13 +68,16 @@ public class CodeDelegationTransactionDecoder {
                       accessListEntryRLPInput.leaveList();
                       return accessListEntry;
                     }))
-            .codeDelegations(input.readList(CodeDelegationTransactionDecoder::decodeInnerPayload));
+            .codeDelegations(txRlp.readList(CodeDelegationTransactionDecoder::decodeInnerPayload))
+            .sizeForBlockInclusion(input.size())
+            .sizeForAnnouncement(input.size())
+            .hash(Hash.hash(input));
 
-    final byte recId = (byte) input.readUnsignedByteScalar();
-    final BigInteger r = input.readUInt256Scalar().toUnsignedBigInteger();
-    final BigInteger s = input.readUInt256Scalar().toUnsignedBigInteger();
+    final byte recId = (byte) txRlp.readUnsignedByteScalar();
+    final BigInteger r = txRlp.readUInt256Scalar().toUnsignedBigInteger();
+    final BigInteger s = txRlp.readUInt256Scalar().toUnsignedBigInteger();
 
-    input.leaveList();
+    txRlp.leaveList();
 
     return builder.signature(SIGNATURE_ALGORITHM.get().createSignature(r, s, recId)).build();
   }
@@ -81,7 +89,7 @@ public class CodeDelegationTransactionDecoder {
     final Address address = Address.wrap(input.readBytes());
     final long nonce = input.readLongScalar();
 
-    final BigInteger yParity = input.readUInt256Scalar().toUnsignedBigInteger();
+    final byte yParity = (byte) input.readUnsignedByteScalar();
     final BigInteger r = input.readUInt256Scalar().toUnsignedBigInteger();
     final BigInteger s = input.readUInt256Scalar().toUnsignedBigInteger();
 

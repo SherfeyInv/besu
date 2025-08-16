@@ -16,11 +16,12 @@ package org.hyperledger.besu.consensus.clique;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.hyperledger.besu.datatypes.HardforkId.MainnetHardforkId.FRONTIER;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import org.hyperledger.besu.config.CliqueConfigOptions;
-import org.hyperledger.besu.config.GenesisConfigFile;
+import org.hyperledger.besu.config.GenesisConfig;
 import org.hyperledger.besu.config.GenesisConfigOptions;
 import org.hyperledger.besu.config.JsonCliqueConfigOptions;
 import org.hyperledger.besu.consensus.common.ForkSpec;
@@ -32,7 +33,7 @@ import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.chain.BadBlockManager;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
-import org.hyperledger.besu.ethereum.core.MiningParameters;
+import org.hyperledger.besu.ethereum.core.MiningConfiguration;
 import org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSpec;
@@ -60,7 +61,7 @@ public class CliqueProtocolScheduleTest {
             + "\"byzantiumBlock\": 1035301}"
             + "}";
 
-    final GenesisConfigOptions config = GenesisConfigFile.fromConfig(jsonInput).getConfigOptions();
+    final GenesisConfigOptions config = GenesisConfig.fromConfig(jsonInput).getConfigOptions();
     final ProtocolSchedule protocolSchedule =
         CliqueProtocolSchedule.create(
             config,
@@ -68,7 +69,7 @@ public class CliqueProtocolScheduleTest {
             NODE_KEY,
             false,
             EvmConfiguration.DEFAULT,
-            MiningParameters.MINING_DISABLED,
+            MiningConfiguration.MINING_DISABLED,
             new BadBlockManager(),
             false,
             new NoOpMetricsSystem());
@@ -89,18 +90,18 @@ public class CliqueProtocolScheduleTest {
         new ForksSchedule<>(List.of(new ForkSpec<>(0, JsonCliqueConfigOptions.DEFAULT)));
     final ProtocolSpec homestead =
         CliqueProtocolSchedule.create(
-                GenesisConfigFile.DEFAULT.getConfigOptions(),
+                GenesisConfig.DEFAULT.getConfigOptions(),
                 forksSchedule,
                 NODE_KEY,
                 false,
                 EvmConfiguration.DEFAULT,
-                MiningParameters.MINING_DISABLED,
+                MiningConfiguration.MINING_DISABLED,
                 new BadBlockManager(),
                 false,
                 new NoOpMetricsSystem())
             .getByBlockHeader(blockHeader(0));
 
-    assertThat(homestead.getName()).isEqualTo("Frontier");
+    assertThat(homestead.getHardforkId()).isEqualTo(FRONTIER);
     assertThat(homestead.getBlockReward()).isEqualTo(Wei.ZERO);
     assertThat(homestead.isSkipZeroBlockRewards()).isEqualTo(true);
     assertThat(homestead.getDifficultyCalculator()).isInstanceOf(CliqueDifficultyCalculator.class);
@@ -120,7 +121,7 @@ public class CliqueProtocolScheduleTest {
                     NODE_KEY,
                     false,
                     EvmConfiguration.DEFAULT,
-                    MiningParameters.MINING_DISABLED,
+                    MiningConfiguration.MINING_DISABLED,
                     new BadBlockManager(),
                     false,
                     new NoOpMetricsSystem()))
@@ -142,7 +143,7 @@ public class CliqueProtocolScheduleTest {
                     NODE_KEY,
                     false,
                     EvmConfiguration.DEFAULT,
-                    MiningParameters.MINING_DISABLED,
+                    MiningConfiguration.MINING_DISABLED,
                     new BadBlockManager(),
                     false,
                     new NoOpMetricsSystem()))
@@ -158,7 +159,7 @@ public class CliqueProtocolScheduleTest {
     final String jsonInput =
         "{\"config\": " + "\t{\"chainId\": 1337,\n" + "\t\"londonBlock\": 2}\n" + "}";
 
-    final GenesisConfigOptions config = GenesisConfigFile.fromConfig(jsonInput).getConfigOptions();
+    final GenesisConfigOptions config = GenesisConfig.fromConfig(jsonInput).getConfigOptions();
     final ForksSchedule<CliqueConfigOptions> forksSchedule =
         new ForksSchedule<>(List.of(new ForkSpec<>(0, JsonCliqueConfigOptions.DEFAULT)));
     final ProtocolSchedule protocolSchedule =
@@ -168,7 +169,7 @@ public class CliqueProtocolScheduleTest {
             NODE_KEY,
             false,
             EvmConfiguration.DEFAULT,
-            MiningParameters.MINING_DISABLED,
+            MiningConfiguration.MINING_DISABLED,
             new BadBlockManager(),
             false,
             new NoOpMetricsSystem());

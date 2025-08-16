@@ -62,11 +62,13 @@ public class TransactionSelectionResult {
     BLOCK_FULL(true, false, false),
     BLOBS_FULL(false, false, false),
     BLOCK_OCCUPANCY_ABOVE_THRESHOLD(true, false, false),
+    BLOCK_SIZE_ABOVE_THRESHOLD(true, false, false),
     BLOCK_SELECTION_TIMEOUT(true, false, false),
     BLOCK_SELECTION_TIMEOUT_INVALID_TX(true, true, true),
     TX_EVALUATION_TOO_LONG(true, false, true),
     INVALID_TX_EVALUATION_TOO_LONG(true, true, true),
-    INVALID_TRANSIENT(false, false, true),
+    INVALID_TRANSIENT(false, false, false),
+    INVALID_PENALIZED(false, false, true),
     INVALID(false, true, false);
 
     private final boolean stop;
@@ -156,25 +158,39 @@ public class TransactionSelectionResult {
       TransactionSelectionResult.invalidTransient("TX_TOO_LARGE_FOR_REMAINING_BLOB_GAS");
 
   /**
+   * The transaction has not been selected since there is not enough remaining block bytes in the
+   * block to fit the transaction, but selection should continue.
+   */
+  public static final TransactionSelectionResult TOO_LARGE_FOR_REMAINING_BLOCK_SIZE =
+      TransactionSelectionResult.invalidTransient("TOO_LARGE_FOR_REMAINING_BLOCK_SIZE");
+
+  /**
    * The transaction has not been selected since its current price is below the configured min
    * price, but the selection should continue.
    */
   public static final TransactionSelectionResult CURRENT_TX_PRICE_BELOW_MIN =
-      TransactionSelectionResult.invalidTransient("CURRENT_TX_PRICE_BELOW_MIN");
+      TransactionSelectionResult.invalidPenalized("CURRENT_TX_PRICE_BELOW_MIN");
 
   /**
    * The transaction has not been selected since its blob price is below the current network blob
    * price, but the selection should continue.
    */
   public static final TransactionSelectionResult BLOB_PRICE_BELOW_CURRENT_MIN =
-      TransactionSelectionResult.invalidTransient("BLOB_PRICE_BELOW_CURRENT_MIN");
+      TransactionSelectionResult.invalidPenalized("BLOB_PRICE_BELOW_CURRENT_MIN");
 
   /**
    * The transaction has not been selected since its priority fee is below the configured min
    * priority fee per gas, but the selection should continue.
    */
   public static final TransactionSelectionResult PRIORITY_FEE_PER_GAS_BELOW_CURRENT_MIN =
-      TransactionSelectionResult.invalidTransient("PRIORITY_FEE_PER_GAS_BELOW_CURRENT_MIN");
+      TransactionSelectionResult.invalidPenalized("PRIORITY_FEE_PER_GAS_BELOW_CURRENT_MIN");
+
+  /**
+   * The transaction has not been selected since its sender already had a previous transaction not
+   * selected
+   */
+  public static final TransactionSelectionResult SENDER_WITH_PREVIOUS_TX_NOT_SELECTED =
+      TransactionSelectionResult.invalidTransient("SENDER_WITH_PREVIOUS_TX_NOT_SELECTED");
 
   private final Status status;
   private final Optional<String> maybeInvalidReason;
@@ -208,6 +224,18 @@ public class TransactionSelectionResult {
    */
   public static TransactionSelectionResult invalidTransient(final String invalidReason) {
     return new TransactionSelectionResult(BaseStatus.INVALID_TRANSIENT, invalidReason);
+  }
+
+  /**
+   * Return a selection result that identify the candidate transaction as temporarily invalid and
+   * that it should be penalized, this means that the transaction could become valid at a later
+   * time.
+   *
+   * @param invalidReason the reason why transaction is invalid
+   * @return the selection result
+   */
+  public static TransactionSelectionResult invalidPenalized(final String invalidReason) {
+    return new TransactionSelectionResult(BaseStatus.INVALID_PENALIZED, invalidReason);
   }
 
   /**

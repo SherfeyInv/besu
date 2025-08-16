@@ -36,7 +36,7 @@ import org.hyperledger.besu.ethereum.eth.sync.state.PendingBlocksManager;
 import org.hyperledger.besu.ethereum.eth.sync.state.SyncState;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.storage.StorageProvider;
-import org.hyperledger.besu.ethereum.trie.diffbased.bonsai.BonsaiWorldStateProvider;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.BonsaiWorldStateProvider;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.metrics.SyncDurationMetrics;
@@ -99,6 +99,7 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
     ChainHeadTracker.trackChainHeadForPeers(
         ethContext,
         protocolSchedule,
+        syncConfig,
         protocolContext.getBlockchain(),
         this::calculateTrailingPeerRequirements,
         metricsSystem);
@@ -136,59 +137,57 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
                     syncState,
                     metricsSystem,
                     terminationCondition,
+                    peerTaskExecutor,
                     syncDurationMetrics));
 
-    if (SyncMode.FAST.equals(syncConfig.getSyncMode())) {
-      this.fastSyncFactory =
-          () ->
-              FastDownloaderFactory.create(
-                  pivotBlockSelector,
-                  syncConfig,
-                  dataDirectory,
-                  protocolSchedule,
-                  protocolContext,
-                  metricsSystem,
-                  ethContext,
-                  peerTaskExecutor,
-                  worldStateStorageCoordinator,
-                  syncState,
-                  clock,
-                  syncDurationMetrics);
-    } else if (syncConfig.getSyncMode() == SyncMode.CHECKPOINT) {
-      this.fastSyncFactory =
-          () ->
-              CheckpointDownloaderFactory.createCheckpointDownloader(
-                  new SnapSyncStatePersistenceManager(storageProvider),
-                  pivotBlockSelector,
-                  syncConfig,
-                  dataDirectory,
-                  protocolSchedule,
-                  protocolContext,
-                  metricsSystem,
-                  ethContext,
-                  peerTaskExecutor,
-                  worldStateStorageCoordinator,
-                  syncState,
-                  clock,
-                  syncDurationMetrics);
-    } else {
-      this.fastSyncFactory =
-          () ->
-              SnapDownloaderFactory.createSnapDownloader(
-                  new SnapSyncStatePersistenceManager(storageProvider),
-                  pivotBlockSelector,
-                  syncConfig,
-                  dataDirectory,
-                  protocolSchedule,
-                  protocolContext,
-                  metricsSystem,
-                  ethContext,
-                  peerTaskExecutor,
-                  worldStateStorageCoordinator,
-                  syncState,
-                  clock,
-                  syncDurationMetrics);
-    }
+    this.fastSyncFactory =
+        switch (syncConfig.getSyncMode()) {
+          case FAST ->
+              () ->
+                  FastDownloaderFactory.create(
+                      pivotBlockSelector,
+                      syncConfig,
+                      dataDirectory,
+                      protocolSchedule,
+                      protocolContext,
+                      metricsSystem,
+                      ethContext,
+                      worldStateStorageCoordinator,
+                      syncState,
+                      clock,
+                      syncDurationMetrics);
+          case CHECKPOINT ->
+              () ->
+                  CheckpointDownloaderFactory.createCheckpointDownloader(
+                      new SnapSyncStatePersistenceManager(storageProvider),
+                      pivotBlockSelector,
+                      syncConfig,
+                      dataDirectory,
+                      protocolSchedule,
+                      protocolContext,
+                      metricsSystem,
+                      ethContext,
+                      worldStateStorageCoordinator,
+                      syncState,
+                      clock,
+                      syncDurationMetrics);
+          case SNAP ->
+              () ->
+                  SnapDownloaderFactory.createSnapDownloader(
+                      new SnapSyncStatePersistenceManager(storageProvider),
+                      pivotBlockSelector,
+                      syncConfig,
+                      dataDirectory,
+                      protocolSchedule,
+                      protocolContext,
+                      metricsSystem,
+                      ethContext,
+                      worldStateStorageCoordinator,
+                      syncState,
+                      clock,
+                      syncDurationMetrics);
+          default -> () -> Optional.empty();
+        };
 
     // create a non-resync fast sync downloader:
     this.fastSyncDownloader = this.fastSyncFactory.get();

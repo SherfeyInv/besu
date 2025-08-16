@@ -17,8 +17,11 @@ package org.hyperledger.besu.ethereum.eth.sync.fastsync;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.EthPeer;
+import org.hyperledger.besu.ethereum.eth.manager.peertask.PeerTaskExecutorResponseCode;
+import org.hyperledger.besu.ethereum.eth.manager.peertask.PeerTaskExecutorResult;
+import org.hyperledger.besu.ethereum.eth.manager.peertask.task.GetHeadersFromPeerTask;
 import org.hyperledger.besu.ethereum.eth.manager.task.EthTask;
-import org.hyperledger.besu.ethereum.eth.manager.task.WaitForPeerTask;
+import org.hyperledger.besu.ethereum.eth.sync.SynchronizerConfiguration;
 import org.hyperledger.besu.ethereum.eth.sync.tasks.RetryingGetHeaderFromPeerByNumberTask;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
@@ -26,12 +29,17 @@ import org.hyperledger.besu.util.FutureUtils;
 
 import java.time.Duration;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
@@ -52,6 +60,7 @@ class PivotBlockConfirmer {
   private final EthContext ethContext;
   private final MetricsSystem metricsSystem;
   private final ProtocolSchedule protocolSchedule;
+  private final SynchronizerConfiguration synchronizerConfiguration;
 
   // The number of peers we need to query to confirm our pivot block
   private final int numberOfPeersToQuery;
@@ -65,6 +74,7 @@ class PivotBlockConfirmer {
   private final Map<Bytes, RetryingGetHeaderFromPeerByNumberTask> pivotBlockQueriesByPeerId =
       new ConcurrentHashMap<>();
   private final Map<BlockHeader, AtomicInteger> pivotBlockVotes = new ConcurrentHashMap<>();
+  private final Set<EthPeer> peersUsed = Collections.synchronizedSet(new HashSet<>());
 
   private final AtomicBoolean isStarted = new AtomicBoolean(false);
   private final AtomicBoolean isCancelled = new AtomicBoolean(false);
@@ -73,12 +83,14 @@ class PivotBlockConfirmer {
       final ProtocolSchedule protocolSchedule,
       final EthContext ethContext,
       final MetricsSystem metricsSystem,
+      final SynchronizerConfiguration synchronizerConfiguration,
       final long pivotBlockNumber,
       final int numberOfPeersToQuery,
       final int numberOfRetriesPerPeer) {
     this.protocolSchedule = protocolSchedule;
     this.ethContext = ethContext;
     this.metricsSystem = metricsSystem;
+    this.synchronizerConfiguration = synchronizerConfiguration;
     this.pivotBlockNumber = pivotBlockNumber;
     this.numberOfPeersToQuery = numberOfPeersToQuery;
     this.numberOfRetriesPerPeer = numberOfRetriesPerPeer;
@@ -96,10 +108,22 @@ class PivotBlockConfirmer {
 
   private void queryPeers(final long blockNumber) {
     synchronized (runningQueries) {
-      for (int i = 0; i < numberOfPeersToQuery; i++) {
-        final CompletableFuture<?> query =
-            executePivotQuery(blockNumber).whenComplete(this::processReceivedHeader);
-        runningQueries.add(query);
+      if (synchronizerConfiguration.isPeerTaskSystemEnabled()) {
+        for (EthPeer ethPeer :
+            ethContext.getEthPeers().streamBestPeers().toList().subList(0, numberOfPeersToQuery)) {
+          peersUsed.add(ethPeer);
+          final CompletableFuture<?> query =
+              executePivotQueryWithPeerTaskSystem(blockNumber, ethPeer)
+                  .whenComplete(this::processReceivedHeader);
+          runningQueries.add(query);
+        }
+
+      } else {
+        for (int i = 0; i < numberOfPeersToQuery; i++) {
+          final CompletableFuture<?> query =
+              executePivotQuery(blockNumber).whenComplete(this::processReceivedHeader);
+          runningQueries.add(query);
+        }
       }
     }
   }
@@ -128,7 +152,7 @@ class PivotBlockConfirmer {
     } else if (votes >= numberOfPeersToQuery) {
       // We've received the required number of votes and have selected our pivot block
       LOG.info("Confirmed pivot block at {}: {}", pivotBlockNumber, blockHeader.getHash());
-      result.complete(new FastSyncState(blockHeader));
+      result.complete(new FastSyncState(blockHeader, false));
     } else {
       LOG.info(
           "Received {} confirmation(s) for pivot block header {}: {}",
@@ -157,7 +181,6 @@ class PivotBlockConfirmer {
       // Stop loop if this task is done
       return CompletableFuture.failedFuture(new CancellationException());
     }
-
     final Optional<RetryingGetHeaderFromPeerByNumberTask> query = createPivotQuery(blockNumber);
     final CompletableFuture<BlockHeader> pivotHeaderFuture;
     if (query.isPresent()) {
@@ -170,12 +193,61 @@ class PivotBlockConfirmer {
       pivotHeaderFuture =
           ethContext
               .getScheduler()
-              .timeout(WaitForPeerTask.create(ethContext, metricsSystem), Duration.ofSeconds(5))
-              .handle((err, res) -> null) // Ignore result
-              .thenCompose(res -> executePivotQuery(blockNumber));
+              .scheduleFutureTask(
+                  () ->
+                      ethContext
+                          .getEthPeers()
+                          .waitForPeer(
+                              (peer) -> !pivotBlockQueriesByPeerId.containsKey(peer.nodeId()))
+                          // Ignore result, ensure even a timeout will result in calling
+                          // executePivotQuery
+                          .handle((r, e) -> null)
+                          .thenCompose(res -> executePivotQuery(blockNumber)),
+                  Duration.ofSeconds(5));
     }
 
     return pivotHeaderFuture;
+  }
+
+  private CompletableFuture<BlockHeader> executePivotQueryWithPeerTaskSystem(
+      final long blockNumber, final EthPeer ethPeer) {
+    GetHeadersFromPeerTask task =
+        new GetHeadersFromPeerTask(
+            blockNumber,
+            1,
+            0,
+            GetHeadersFromPeerTask.Direction.FORWARD,
+            ethContext.getEthPeers().getMaxPeers(),
+            protocolSchedule);
+    if (isCancelled.get()) {
+      return CompletableFuture.failedFuture(
+          new CancellationException("Pivot block confirmation has been cancelled"));
+    }
+
+    return ethContext
+        .getScheduler()
+        .scheduleServiceTask(
+            () -> {
+              PeerTaskExecutorResult<List<BlockHeader>> taskResult =
+                  ethContext.getPeerTaskExecutor().executeAgainstPeer(task, ethPeer);
+              if (taskResult.responseCode() == PeerTaskExecutorResponseCode.INTERNAL_SERVER_ERROR) {
+                // something is probably wrong with the request, so we won't retry as below
+                return CompletableFuture.failedFuture(
+                    new RuntimeException("Unexpected internal issue"));
+              } else if (taskResult.responseCode() != PeerTaskExecutorResponseCode.SUCCESS
+                  || taskResult.result().isEmpty()) {
+                // recursively call executePivotQueryWithPeerTaskSystem to retry with a different
+                // peer.
+                try {
+                  return executePivotQueryWithPeerTaskSystem(
+                      blockNumber,
+                      ethContext.getEthPeers().waitForPeer((p) -> !peersUsed.contains(p)).get());
+                } catch (InterruptedException | ExecutionException e) {
+                  return CompletableFuture.failedFuture(e);
+                }
+              }
+              return CompletableFuture.completedFuture(taskResult.result().get().getFirst());
+            });
   }
 
   private Optional<RetryingGetHeaderFromPeerByNumberTask> createPivotQuery(final long blockNumber) {

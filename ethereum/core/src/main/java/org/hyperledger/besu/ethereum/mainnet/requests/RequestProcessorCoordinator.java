@@ -14,10 +14,13 @@
  */
 package org.hyperledger.besu.ethereum.mainnet.requests;
 
+import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.RequestType;
 import org.hyperledger.besu.ethereum.core.Request;
 
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import com.google.common.collect.ImmutableSortedMap;
 
@@ -35,7 +38,7 @@ public class RequestProcessorCoordinator {
     this.processors = processors;
   }
 
-  public List<Request> process(final ProcessRequestContext context) {
+  public List<Request> process(final RequestProcessingContext context) {
     return processors.values().stream()
         .map(requestProcessor -> requestProcessor.process(context))
         .toList();
@@ -59,5 +62,16 @@ public class RequestProcessorCoordinator {
       }
       return new RequestProcessorCoordinator(processors);
     }
+  }
+
+  public Map<String, String> getContractConfigs() {
+    return processors.values().stream()
+        .filter(processor -> processor.getContractAddress().isPresent())
+        .map(
+            processor ->
+                Map.entry(
+                    processor.getContractName().orElse(""),
+                    processor.getContractAddress().map(Address::toHexString).orElse("")))
+        .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
   }
 }

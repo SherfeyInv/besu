@@ -28,9 +28,12 @@ Having the following accounts is necessary for contributing code/issues to Besu.
 
 ### Other important information
 
-* [Roadmap](https://wiki.hyperledger.org/pages/viewpage.action?pageId=24781786)
+* [Roadmap](https://lf-hyperledger.atlassian.net/wiki/spaces/BESU/pages/22154278/Besu+Roadmap+Planning)
 * [Code of Conduct](https://wiki.hyperledger.org/display/BESU/Code+of+Conduct)
 * [Governance](https://wiki.hyperledger.org/display/BESU/Governance)
+
+### Guidelines for Non-Code and other Trivial Contributions
+Please keep in mind that we do not accept non-code contributions like fixing comments, typos or some other trivial fixes. Although we appreciate the extra help, managing lots of these small contributions is unfeasible, and puts extra pressure in our continuous delivery systems (running all tests, etc). Feel free to open an issue pointing any of those errors, and we will batch them into a single change.
 
 [How to Contribute]: https://wiki.hyperledger.org/display/BESU/How+to+Contribute
 [Linux Foundation (LF) account]: https://identity.linuxfoundation.org/

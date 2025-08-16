@@ -28,8 +28,13 @@ public interface MutableWorldState extends WorldState, MutableWorldView {
    */
   void persist(BlockHeader blockHeader);
 
-  default MutableWorldState freeze() {
+  default MutableWorldState freezeStorage() {
     // no op
     throw new UnsupportedOperationException("cannot freeze");
+  }
+
+  default MutableWorldState disableTrie() {
+    // no op
+    throw new UnsupportedOperationException("cannot disable trie");
   }
 }

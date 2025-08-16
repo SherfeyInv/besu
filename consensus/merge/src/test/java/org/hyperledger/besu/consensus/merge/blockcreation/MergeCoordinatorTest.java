@@ -18,6 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.fail;
 import static org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider.createInMemoryBlockchain;
 import static org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider.createInMemoryWorldStateArchive;
+import static org.hyperledger.besu.ethereum.eth.transactions.PendingTransaction.MAX_SCORE;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -25,6 +26,7 @@ import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doCallRealMethod;
+import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
@@ -55,11 +57,10 @@ import org.hyperledger.besu.ethereum.core.BlockBody;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
 import org.hyperledger.besu.ethereum.core.Difficulty;
-import org.hyperledger.besu.ethereum.core.ImmutableMiningParameters;
-import org.hyperledger.besu.ethereum.core.ImmutableMiningParameters.MutableInitValues;
-import org.hyperledger.besu.ethereum.core.ImmutableMiningParameters.Unstable;
-import org.hyperledger.besu.ethereum.core.MiningParameters;
-import org.hyperledger.besu.ethereum.core.Synchronizer;
+import org.hyperledger.besu.ethereum.core.ImmutableMiningConfiguration;
+import org.hyperledger.besu.ethereum.core.ImmutableMiningConfiguration.MutableInitValues;
+import org.hyperledger.besu.ethereum.core.ImmutableMiningConfiguration.Unstable;
+import org.hyperledger.besu.ethereum.core.MiningConfiguration;
 import org.hyperledger.besu.ethereum.core.TransactionTestFixture;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.EthScheduler;
@@ -74,23 +75,27 @@ import org.hyperledger.besu.ethereum.eth.transactions.TransactionPoolMetrics;
 import org.hyperledger.besu.ethereum.eth.transactions.sorter.BaseFeePendingTransactionsSorter;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.mainnet.feemarket.BaseFeeMarket;
-import org.hyperledger.besu.ethereum.mainnet.feemarket.LondonFeeMarket;
+import org.hyperledger.besu.ethereum.mainnet.feemarket.FeeMarket;
 import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateArchive;
 import org.hyperledger.besu.metrics.StubMetricsSystem;
 import org.hyperledger.besu.testutil.TestClock;
 import org.hyperledger.besu.util.number.Fraction;
 
+import java.math.BigInteger;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 
 import com.google.common.base.Suppliers;
 import org.apache.tuweni.bytes.Bytes;
@@ -98,6 +103,10 @@ import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.aggregator.ArgumentsAccessor;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.Answers;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
@@ -125,6 +134,12 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
       new KeyPair(PRIVATE_KEY1, SIGNATURE_ALGORITHM.get().createPublicKey(PRIVATE_KEY1));
 
   private static final long REPETITION_MIN_DURATION = 100;
+
+  private static final BigInteger CHAIN_ID_MAINNET = BigInteger.ONE;
+  private static final BigInteger CHAIN_ID_HOODI = BigInteger.valueOf(560048);
+  private static final long DEFAULT_TARGET_GAS_LIMIT = 45_000_000L;
+  private static final long DEFAULT_TARGET_GAS_LIMIT_TESTNET = 60_000_000L;
+
   @Mock MergeContext mergeContext;
   @Mock BackwardSyncContext backwardSyncContext;
 
@@ -133,10 +148,10 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
 
   @Mock EthScheduler ethScheduler;
 
-  private final Address coinbase = genesisAllocations(getPosGenesisConfigFile()).findFirst().get();
+  private final Address coinbase = genesisAllocations(getPosGenesisConfig()).findFirst().get();
 
-  private MiningParameters miningParameters =
-      ImmutableMiningParameters.builder()
+  private MiningConfiguration miningConfiguration =
+      ImmutableMiningConfiguration.builder()
           .mutableInitValues(MutableInitValues.builder().coinbase(coinbase).build())
           .unstable(
               Unstable.builder()
@@ -149,7 +164,7 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
 
   private final ProtocolSchedule protocolSchedule = spy(getMergeProtocolSchedule());
   private final GenesisState genesisState =
-      GenesisState.fromConfig(getPosGenesisConfigFile(), protocolSchedule);
+      GenesisState.fromConfig(getPosGenesisConfig(), protocolSchedule, new CodeCache());
 
   private final WorldStateArchive worldStateArchive = createInMemoryWorldStateArchive();
 
@@ -159,7 +174,7 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
   private final Address suggestedFeeRecipient = Address.ZERO;
   private final BlockHeaderTestFixture headerGenerator = new BlockHeaderTestFixture();
   private final BaseFeeMarket feeMarket =
-      new LondonFeeMarket(0, genesisState.getBlock().getHeader().getBaseFee());
+      FeeMarket.london(0, genesisState.getBlock().getHeader().getBaseFee());
 
   private final org.hyperledger.besu.metrics.StubMetricsSystem metricsSystem =
       new StubMetricsSystem();
@@ -189,9 +204,13 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
         .thenReturn(genesisState.getBlock().getHeader().getDifficulty().plus(1L));
 
     protocolContext =
-        new ProtocolContext(blockchain, worldStateArchive, mergeContext, badBlockManager);
-    protocolContext.setSynchronizer(mock(Synchronizer.class));
-    var mutable = worldStateArchive.getMutable();
+        new ProtocolContext.Builder()
+            .withBlockchain(blockchain)
+            .withWorldStateArchive(worldStateArchive)
+            .withConsensusContext(mergeContext)
+            .withBadBlockManager(badBlockManager)
+            .build();
+    var mutable = worldStateArchive.getWorldState();
     genesisState.writeStateTo(mutable);
     mutable.persist(null);
 
@@ -228,7 +247,7 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
             protocolSchedule,
             ethScheduler,
             transactionPool,
-            miningParameters,
+            miningConfiguration,
             backwardSyncContext,
             Optional.empty());
   }
@@ -273,7 +292,7 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
           MergeBlockCreator beingSpiedOn =
               spy(
                   new MergeBlockCreator(
-                      miningParameters,
+                      miningConfiguration,
                       parent -> Bytes.EMPTY,
                       transactionPool,
                       protocolContext,
@@ -302,7 +321,7 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
                 protocolContext,
                 protocolSchedule,
                 ethScheduler,
-                miningParameters,
+                miningConfiguration,
                 backwardSyncContext,
                 mergeBlockCreatorFactory));
 
@@ -543,9 +562,9 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
   @Test
   public void shouldStopRetryBlockCreationIfTimeExpired() throws InterruptedException {
     final AtomicLong retries = new AtomicLong(0);
-    miningParameters =
-        ImmutableMiningParameters.builder()
-            .from(miningParameters)
+    miningConfiguration =
+        ImmutableMiningConfiguration.builder()
+            .from(miningConfiguration)
             .unstable(Unstable.builder().posBlockCreationMaxTime(100).build())
             .build();
     doAnswer(
@@ -737,8 +756,8 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
   public void shouldUseExtraDataFromMiningParameters() {
     final Bytes extraData = Bytes.fromHexString("0x1234");
 
-    miningParameters =
-        ImmutableMiningParameters.builder()
+    miningConfiguration =
+        ImmutableMiningConfiguration.builder()
             .mutableInitValues(MutableInitValues.builder().extraData(extraData).build())
             .build();
 
@@ -748,7 +767,7 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
             protocolSchedule,
             ethScheduler,
             transactionPool,
-            miningParameters,
+            miningConfiguration,
             backwardSyncContext,
             Optional.empty());
 
@@ -892,7 +911,8 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
         prevParent, genesisState.getBlock().getHash(), genesisState.getBlock().getHash());
     assertThat(lastBlockAddedEvent.get().getCommonAncestorHash()).isEqualTo(expectedCommonAncestor);
     assertThat(lastBlockAddedEvent.get().getEventType()).isEqualTo(EventType.CHAIN_REORG);
-    assertThat(lastBlockAddedEvent.get().getBlock().getHash()).isEqualTo(prevParent.getBlockHash());
+    assertThat(lastBlockAddedEvent.get().getHeader().getHash())
+        .isEqualTo(prevParent.getBlockHash());
   }
 
   @Test
@@ -971,6 +991,54 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
     verify(blockchain, never()).rewindToBlock(any());
   }
 
+  @ParameterizedTest(name = "{index}: {0}")
+  @MethodSource("getGasLimits")
+  public void shouldSetCorrectTargetGasLimit(final ArgumentsAccessor argumentsAccessor) {
+    final long chainId = argumentsAccessor.getLong(1);
+    final long expectedTargetGasLimit = argumentsAccessor.getLong(2);
+
+    final MiningConfiguration mockMiningConfiguration = mock(MiningConfiguration.class);
+    when(mockMiningConfiguration.getTargetGasLimit()).thenReturn(OptionalLong.empty());
+    when(protocolSchedule.getChainId()).thenReturn(Optional.of(BigInteger.valueOf(chainId)));
+    doNothing().when(backwardSyncContext).subscribeBadChainListener(any());
+
+    MergeCoordinator testTargetGasLimitCoordinator =
+        new MergeCoordinator(
+            protocolContext,
+            protocolSchedule,
+            ethScheduler,
+            transactionPool,
+            mockMiningConfiguration,
+            backwardSyncContext,
+            Optional.empty());
+
+    assertThat(testTargetGasLimitCoordinator).isNotNull();
+    verify(mockMiningConfiguration).setTargetGasLimit(expectedTargetGasLimit);
+  }
+
+  @Test
+  public void shouldReturnExpectedTargetGasLimitForMainnet() {
+    final long targetGasLimitMainnet =
+        MergeCoordinator.getDefaultGasLimitByChainId(Optional.of(CHAIN_ID_MAINNET));
+    assertThat(targetGasLimitMainnet).isEqualTo(DEFAULT_TARGET_GAS_LIMIT);
+  }
+
+  @Test
+  public void shouldReturnExpectedTargetGasLimitForTestnet() {
+    final long targetGasLimitMainnet =
+        MergeCoordinator.getDefaultGasLimitByChainId(Optional.of(CHAIN_ID_HOODI));
+    assertThat(targetGasLimitMainnet).isEqualTo(DEFAULT_TARGET_GAS_LIMIT_TESTNET);
+  }
+
+  public static Stream<Arguments> getGasLimits() {
+    return Stream.of(
+        Arguments.of("mainnet", 1L, 45_000_000L),
+        Arguments.of("holesky", 17_000L, 60_000_000L),
+        Arguments.of("sepolia", 11_155_111L, 60_000_000L),
+        Arguments.of("hoodi", 560_048L, 60_000_000L),
+        Arguments.of("ephemery", 39_438_135L, 60_000_000L));
+  }
+
   private void sendNewPayloadAndForkchoiceUpdate(
       final Block block, final Optional<BlockHeader> finalizedHeader, final Hash safeHash) {
 
@@ -997,7 +1065,7 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
                 genesisState.getBlock().getHeader().getNumber() + 1,
                 genesisState.getBlock().getHeader().getBaseFee().orElse(Wei.of(0x3b9aca00)),
                 0,
-                15000000l))
+                15000000L))
         .timestamp(1)
         .gasLimit(genesisState.getBlock().getHeader().getGasLimit())
         .stateRoot(genesisState.getBlock().getHeader().getStateRoot())
@@ -1020,7 +1088,7 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
                 genesisState.getBlock().getHeader().getNumber() + 1,
                 parentHeader.getBaseFee().orElse(Wei.of(0x3b9aca00)),
                 0,
-                15000000l))
+                15000000L))
         .buildHeader();
   }
 
@@ -1041,7 +1109,8 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
             .nonce(transactionNumber)
             .createTransaction(KEYS1),
         true,
-        true);
+        true,
+        MAX_SCORE);
   }
 
   private static BlockHeader mockBlockHeader() {

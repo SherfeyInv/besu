@@ -19,6 +19,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static java.util.Collections.emptyList;
 import static java.util.stream.Collectors.joining;
 import static java.util.stream.Collectors.toList;
+import static org.hyperledger.besu.metrics.BesuMetricCategory.BLOCKCHAIN;
 
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.BlockchainStorage.Updater;
@@ -28,11 +29,11 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockWithReceipts;
 import org.hyperledger.besu.ethereum.core.Difficulty;
 import org.hyperledger.besu.ethereum.core.LogWithMetadata;
+import org.hyperledger.besu.ethereum.core.SyncBlock;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
-import org.hyperledger.besu.metrics.prometheus.PrometheusMetricsSystem;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.metrics.Counter;
 import org.hyperledger.besu.util.InvalidConfigurationException;
@@ -56,7 +57,6 @@ import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Streams;
-import io.prometheus.client.guava.cache.CacheMetricsCollector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -75,7 +75,7 @@ public class DefaultBlockchain implements MutableBlockchain {
   private volatile BlockHeader chainHeader;
   private volatile Difficulty totalDifficulty;
   private volatile int chainHeadTransactionCount;
-  private volatile int chainHeadOmmerCount;
+  private volatile Long earliestBlockNumber;
 
   private Comparator<BlockHeader> blockChoiceRule;
 
@@ -87,6 +87,8 @@ public class DefaultBlockchain implements MutableBlockchain {
 
   private Counter gasUsedCounter = NoOpMetricsSystem.NO_OP_COUNTER;
   private Counter numberOfTransactionsCounter = NoOpMetricsSystem.NO_OP_COUNTER;
+  // difficultyForSyncing is thread safe, as it is only used in the one thread of the import step
+  private Difficulty difficultyForSyncing = Difficulty.ZERO;
 
   private DefaultBlockchain(
       final Optional<Block> genesisBlock,
@@ -113,9 +115,13 @@ public class DefaultBlockchain implements MutableBlockchain {
     final Hash chainHead = blockchainStorage.getChainHead().get();
     chainHeader = blockchainStorage.getBlockHeader(chainHead).get();
     totalDifficulty = blockchainStorage.getTotalDifficulty(chainHead).get();
-    final BlockBody chainHeadBody = blockchainStorage.getBlockBody(chainHead).get();
-    chainHeadTransactionCount = chainHeadBody.getTransactions().size();
-    chainHeadOmmerCount = chainHeadBody.getOmmers().size();
+
+    blockchainStorage
+        .getBlockBody(chainHead)
+        .ifPresent(
+            headBlockBody -> {
+              chainHeadTransactionCount = headBlockBody.getTransactions().size();
+            });
 
     this.reorgLoggingThreshold = reorgLoggingThreshold;
     this.blockChoiceRule = heaviestChainBlockChoiceRule;
@@ -134,13 +140,12 @@ public class DefaultBlockchain implements MutableBlockchain {
       totalDifficultyCache =
           Optional.of(
               CacheBuilder.newBuilder().recordStats().maximumSize(numberOfBlocksToCache).build());
-      CacheMetricsCollector cacheMetrics = new CacheMetricsCollector();
-      cacheMetrics.addCache("blockHeaders", blockHeadersCache.get());
-      cacheMetrics.addCache("blockBodies", blockBodiesCache.get());
-      cacheMetrics.addCache("transactionReceipts", transactionReceiptsCache.get());
-      cacheMetrics.addCache("totalDifficulty", totalDifficultyCache.get());
-      if (metricsSystem instanceof PrometheusMetricsSystem prometheusMetricsSystem)
-        prometheusMetricsSystem.addCollector(BesuMetricCategory.BLOCKCHAIN, () -> cacheMetrics);
+      metricsSystem.createGuavaCacheCollector(BLOCKCHAIN, "blockHeaders", blockHeadersCache.get());
+      metricsSystem.createGuavaCacheCollector(BLOCKCHAIN, "blockBodies", blockBodiesCache.get());
+      metricsSystem.createGuavaCacheCollector(
+          BLOCKCHAIN, "transactionReceipts", transactionReceiptsCache.get());
+      metricsSystem.createGuavaCacheCollector(
+          BLOCKCHAIN, "totalDifficulty", totalDifficultyCache.get());
     } else {
       blockHeadersCache = Optional.empty();
       blockBodiesCache = Optional.empty();
@@ -155,11 +160,11 @@ public class DefaultBlockchain implements MutableBlockchain {
   private void createCounters(final MetricsSystem metricsSystem) {
     gasUsedCounter =
         metricsSystem.createCounter(
-            BesuMetricCategory.BLOCKCHAIN, "chain_head_gas_used_counter", "Counter for Gas used");
+            BLOCKCHAIN, "chain_head_gas_used_counter", "Counter for Gas used");
 
     numberOfTransactionsCounter =
         metricsSystem.createCounter(
-            BesuMetricCategory.BLOCKCHAIN,
+            BLOCKCHAIN,
             "chain_head_transaction_count_counter",
             "Counter for the number of transactions");
   }
@@ -184,40 +189,34 @@ public class DefaultBlockchain implements MutableBlockchain {
         this::getSafeBlockNumber);
 
     metricsSystem.createGauge(
-        BesuMetricCategory.BLOCKCHAIN,
-        "difficulty_total",
+        BLOCKCHAIN,
+        "difficulty",
         "Total difficulty of the chainhead",
         () -> this.getChainHead().getTotalDifficulty().toBigInteger().doubleValue());
 
     metricsSystem.createLongGauge(
-        BesuMetricCategory.BLOCKCHAIN,
+        BLOCKCHAIN,
         "chain_head_timestamp",
         "Timestamp from the current chain head",
         () -> getChainHeadHeader().getTimestamp());
 
     metricsSystem.createLongGauge(
-        BesuMetricCategory.BLOCKCHAIN,
+        BLOCKCHAIN,
         "chain_head_gas_used",
         "Gas used by the current chain head block",
         () -> getChainHeadHeader().getGasUsed());
 
     metricsSystem.createLongGauge(
-        BesuMetricCategory.BLOCKCHAIN,
+        BLOCKCHAIN,
         "chain_head_gas_limit",
         "Block gas limit of the current chain head block",
         () -> getChainHeadHeader().getGasLimit());
 
     metricsSystem.createIntegerGauge(
-        BesuMetricCategory.BLOCKCHAIN,
+        BLOCKCHAIN,
         "chain_head_transaction_count",
         "Number of transactions in the current chain head block",
         () -> chainHeadTransactionCount);
-
-    metricsSystem.createIntegerGauge(
-        BesuMetricCategory.BLOCKCHAIN,
-        "chain_head_ommer_count",
-        "Number of ommers in the current chain head block",
-        () -> chainHeadOmmerCount);
   }
 
   public static MutableBlockchain createMutable(
@@ -300,6 +299,16 @@ public class DefaultBlockchain implements MutableBlockchain {
   @Override
   public Optional<Hash> getSafeBlock() {
     return blockchainStorage.getSafeBlock();
+  }
+
+  @Override
+  public Optional<Long> getEarliestBlockNumber() {
+    if (earliestBlockNumber == null) {
+      Optional<Long> maybeEarliestBlockNumber = getFirstNonGenesisBlockNumber();
+      maybeEarliestBlockNumber.ifPresent(value -> earliestBlockNumber = value);
+      return maybeEarliestBlockNumber;
+    }
+    return Optional.of(earliestBlockNumber);
   }
 
   @Override
@@ -419,13 +428,44 @@ public class DefaultBlockchain implements MutableBlockchain {
   @Override
   public synchronized void appendBlock(final Block block, final List<TransactionReceipt> receipts) {
     if (numberOfBlocksToCache != 0) cacheBlockData(block, receipts);
-    appendBlockHelper(new BlockWithReceipts(block, receipts), false);
+    appendBlockHelper(new BlockWithReceipts(block, receipts), false, true);
+  }
+
+  @Override
+  public synchronized void appendBlockWithoutIndexingTransactions(
+      final Block block, final List<TransactionReceipt> receipts) {
+    if (numberOfBlocksToCache != 0) cacheBlockData(block, receipts);
+    appendBlockHelper(new BlockWithReceipts(block, receipts), false, false);
+  }
+
+  @Override
+  public synchronized void appendSyncBlock(
+      final SyncBlock block, final List<TransactionReceipt> receipts) {
+    appendSyncBlockHelper(block, receipts, true);
+  }
+
+  @Override
+  public synchronized void appendSyncBlockWithoutIndexingTransactions(
+      final SyncBlock block, final List<TransactionReceipt> receipts) {
+    appendSyncBlockHelper(block, receipts, false);
   }
 
   @Override
   public synchronized void storeBlock(final Block block, final List<TransactionReceipt> receipts) {
     if (numberOfBlocksToCache != 0) cacheBlockData(block, receipts);
-    appendBlockHelper(new BlockWithReceipts(block, receipts), true);
+    appendBlockHelper(new BlockWithReceipts(block, receipts), true, true);
+  }
+
+  @Override
+  public void unsafeStoreHeader(final BlockHeader blockHeader, final Difficulty totalDifficulty) {
+    final BlockchainStorage.Updater updater = blockchainStorage.updater();
+    updater.putBlockHeader(blockHeader.getHash(), blockHeader);
+    updater.putBlockHash(blockHeader.getNumber(), blockHeader.getBlockHash());
+    updater.putTotalDifficulty(blockHeader.getHash(), totalDifficulty);
+    this.chainHeader = blockHeader;
+    this.totalDifficulty = totalDifficulty;
+    updater.setChainHead(blockHeader.getBlockHash());
+    updater.commit();
   }
 
   private void cacheBlockData(final Block block, final List<TransactionReceipt> receipts) {
@@ -441,7 +481,7 @@ public class DefaultBlockchain implements MutableBlockchain {
     checkArgument(
         block.getBody().getTransactions().size() == receipts.size(),
         "Supplied receipts do not match block transactions.");
-    if (blockIsAlreadyTracked(block)) {
+    if (blockIsAlreadyTracked(block.getHeader())) {
       return false;
     }
     checkArgument(blockIsConnected(block), "Attempt to append non-connected block.");
@@ -449,7 +489,9 @@ public class DefaultBlockchain implements MutableBlockchain {
   }
 
   private void appendBlockHelper(
-      final BlockWithReceipts blockWithReceipts, final boolean storeOnly) {
+      final BlockWithReceipts blockWithReceipts,
+      final boolean storeOnly,
+      final boolean transactionIndexing) {
 
     if (!blockShouldBeProcessed(blockWithReceipts.getBlock(), blockWithReceipts.getReceipts())) {
       return;
@@ -471,10 +513,40 @@ public class DefaultBlockchain implements MutableBlockchain {
     if (storeOnly) {
       blockAddedEvent = handleStoreOnly(blockWithReceipts);
     } else {
-      blockAddedEvent = updateCanonicalChainData(updater, blockWithReceipts);
+      blockAddedEvent = updateCanonicalChainData(updater, blockWithReceipts, transactionIndexing);
       if (blockAddedEvent.isNewCanonicalHead()) {
         updateCacheForNewCanonicalHead(block, td);
       }
+    }
+
+    updater.commit();
+    blockAddedObservers.forEach(observer -> observer.onBlockAdded(blockAddedEvent));
+  }
+
+  private void appendSyncBlockHelper(
+      final SyncBlock block,
+      final List<TransactionReceipt> receipts,
+      final boolean transactionIndexing) {
+
+    if (blockIsAlreadyTracked(block.getHeader())) {
+      return;
+    }
+
+    final Hash hash = block.getHash();
+    final Difficulty td = calculateTotalDifficultyForSyncing(block.getHeader());
+
+    final BlockchainStorage.Updater updater = blockchainStorage.updater();
+
+    updater.putBlockHeader(hash, block.getHeader());
+    updater.putSyncBlockBody(hash, block.getBody());
+    updater.putTransactionReceipts(hash, receipts);
+    updater.putTotalDifficulty(hash, td);
+
+    final BlockAddedEvent blockAddedEvent;
+
+    blockAddedEvent = updateCanonicalChainData(updater, block, receipts, transactionIndexing);
+    if (blockAddedEvent.isNewCanonicalHead()) {
+      updateCacheForNewCanonicalHead(block, td);
     }
 
     updater.commit();
@@ -487,18 +559,16 @@ public class DefaultBlockchain implements MutableBlockchain {
       final List<TransactionReceipt> transactionReceipts,
       final Optional<Difficulty> maybeTotalDifficulty) {
     final BlockchainStorage.Updater updater = blockchainStorage.updater();
-    final Hash hash = block.getHash();
-    updater.putBlockHeader(hash, block.getHeader());
-    updater.putBlockHash(block.getHeader().getNumber(), hash);
-    updater.putBlockBody(hash, block.getBody());
-    final int nbTrx = block.getBody().getTransactions().size();
-    for (int i = 0; i < nbTrx; i++) {
-      final Hash transactionHash = block.getBody().getTransactions().get(i).getHash();
-      updater.putTransactionLocation(transactionHash, new TransactionLocation(transactionHash, i));
-    }
-    updater.putTransactionReceipts(hash, transactionReceipts);
+    final Hash blockHash = block.getHash();
+    updater.putBlockHeader(blockHash, block.getHeader());
+    updater.putBlockHash(block.getHeader().getNumber(), blockHash);
+    updater.putBlockBody(blockHash, block.getBody());
+    final List<Hash> listOfTxHashes =
+        block.getBody().getTransactions().stream().map(Transaction::getHash).toList();
+    indexTransactionsForBlock(updater, blockHash, listOfTxHashes);
+    updater.putTransactionReceipts(blockHash, transactionReceipts);
     maybeTotalDifficulty.ifPresent(
-        totalDifficulty -> updater.putTotalDifficulty(hash, totalDifficulty));
+        totalDifficulty -> updater.putTotalDifficulty(blockHash, totalDifficulty));
     updater.commit();
   }
 
@@ -526,8 +596,26 @@ public class DefaultBlockchain implements MutableBlockchain {
     return blockHeader.getDifficulty().add(parentTotalDifficulty);
   }
 
+  private Difficulty calculateTotalDifficultyForSyncing(final BlockHeader blockHeader) {
+    if (blockHeader.getNumber() == BlockHeader.GENESIS_BLOCK_NUMBER) {
+      difficultyForSyncing = blockHeader.getDifficulty();
+    } else if (difficultyForSyncing.equals(Difficulty.ZERO)) {
+      final Difficulty parentTotalDifficulty =
+          blockchainStorage
+              .getTotalDifficulty(blockHeader.getParentHash())
+              .orElseThrow(
+                  () -> new IllegalStateException("Blockchain is missing total difficulty data."));
+      difficultyForSyncing = parentTotalDifficulty.add(blockHeader.getDifficulty());
+    } else {
+      difficultyForSyncing = difficultyForSyncing.add(blockHeader.getDifficulty());
+    }
+    return difficultyForSyncing;
+  }
+
   private BlockAddedEvent updateCanonicalChainData(
-      final BlockchainStorage.Updater updater, final BlockWithReceipts blockWithReceipts) {
+      final Updater updater,
+      final BlockWithReceipts blockWithReceipts,
+      final boolean transactionIndexing) {
 
     final Block newBlock = blockWithReceipts.getBlock();
     final Hash chainHead = blockchainStorage.getChainHead().orElse(null);
@@ -538,7 +626,7 @@ public class DefaultBlockchain implements MutableBlockchain {
 
     try {
       if (newBlock.getHeader().getParentHash().equals(chainHead) || chainHead == null) {
-        return handleNewHead(updater, blockWithReceipts);
+        return handleNewHead(updater, blockWithReceipts, transactionIndexing);
       } else if (blockChoiceRule.compare(newBlock.getHeader(), chainHeader) > 0) {
         // New block represents a chain reorganization
         return handleChainReorg(updater, blockWithReceipts);
@@ -554,19 +642,52 @@ public class DefaultBlockchain implements MutableBlockchain {
     }
   }
 
+  private BlockAddedEvent updateCanonicalChainData(
+      final BlockchainStorage.Updater updater,
+      final SyncBlock newBlock,
+      final List<TransactionReceipt> receipts,
+      final boolean transactionIndexing) {
+
+    final Hash chainHead = blockchainStorage.getChainHead().orElse(null);
+
+    if (newBlock.getHeader().getNumber() != BlockHeader.GENESIS_BLOCK_NUMBER && chainHead == null) {
+      throw new IllegalStateException("Blockchain is missing chain head.");
+    }
+
+    try {
+      if (newBlock.getHeader().getParentHash().equals(chainHead) || chainHead == null) {
+        return handleNewHead(updater, newBlock, receipts, transactionIndexing);
+      } else {
+        throw new RuntimeException("Blocks during sync should always be in order");
+      }
+    } catch (final NoSuchElementException e) {
+      // Any Optional.get() calls in this block should be present, missing data means data
+      // corruption or a bug.
+      updater.rollback();
+      throw new IllegalStateException("Blockchain is missing data that should be present.", e);
+    }
+  }
+
   private BlockAddedEvent handleStoreOnly(final BlockWithReceipts blockWithReceipts) {
     return BlockAddedEvent.createForStoredOnly(blockWithReceipts.getBlock());
   }
 
   private BlockAddedEvent handleNewHead(
-      final Updater updater, final BlockWithReceipts blockWithReceipts) {
+      final Updater updater,
+      final BlockWithReceipts blockWithReceipts,
+      final boolean transactionIndexing) {
     // This block advances the chain, update the chain head
     final Hash newBlockHash = blockWithReceipts.getHash();
 
     updater.putBlockHash(blockWithReceipts.getNumber(), newBlockHash);
     updater.setChainHead(newBlockHash);
-    indexTransactionForBlock(
-        updater, newBlockHash, blockWithReceipts.getBlock().getBody().getTransactions());
+    if (transactionIndexing) {
+      final List<Hash> listOfTxHashes =
+          blockWithReceipts.getBlock().getBody().getTransactions().stream()
+              .map(Transaction::getHash)
+              .toList();
+      indexTransactionsForBlock(updater, newBlockHash, listOfTxHashes);
+    }
     gasUsedCounter.inc(blockWithReceipts.getHeader().getGasUsed());
     numberOfTransactionsCounter.inc(
         blockWithReceipts.getBlock().getBody().getTransactions().size());
@@ -576,6 +697,32 @@ public class DefaultBlockchain implements MutableBlockchain {
         LogWithMetadata.generate(
             blockWithReceipts.getBlock(), blockWithReceipts.getReceipts(), false),
         blockWithReceipts.getReceipts());
+  }
+
+  private BlockAddedEvent handleNewHead(
+      final Updater updater,
+      final SyncBlock newBlock,
+      final List<TransactionReceipt> receipts,
+      final boolean transactionIndexing) {
+    // This block advances the chain, update the chain head
+    final Hash newBlockHash = newBlock.getHash();
+
+    updater.putBlockHash(newBlock.getHeader().getNumber(), newBlockHash);
+    updater.setChainHead(newBlockHash);
+    final List<Hash> listOfTxHashes =
+        newBlock.getBody().getEncodedTransactions().stream().map(Hash::hash).toList();
+    if (transactionIndexing) {
+      indexTransactionsForBlock(updater, newBlockHash, listOfTxHashes);
+    }
+    gasUsedCounter.inc(newBlock.getHeader().getGasUsed());
+    numberOfTransactionsCounter.inc(newBlock.getBody().getTransactionCount());
+
+    return BlockAddedEvent.createForSyncHeadAdvancement(
+        newBlock.getHeader(),
+        () -> new Block(newBlock.getHeader(), newBlock.getBody().getBodySupplier().get()),
+        LogWithMetadata.generate(
+            newBlock.getHeader().getNumber(), newBlock.getHash(), listOfTxHashes, receipts, false),
+        receipts);
   }
 
   private BlockAddedEvent handleFork(final BlockchainStorage.Updater updater, final Block fork) {
@@ -654,7 +801,9 @@ public class DefaultBlockchain implements MutableBlockchain {
     // Update indexed transactions
     newTransactions.forEach(
         (blockHash, transactionsInBlock) -> {
-          indexTransactionForBlock(updater, blockHash, transactionsInBlock);
+          final List<Hash> listOfTxHashes =
+              transactionsInBlock.stream().map(Transaction::getHash).toList();
+          indexTransactionsForBlock(updater, blockHash, listOfTxHashes);
           // Don't remove transactions that are being re-indexed.
           removedTransactions.removeAll(transactionsInBlock);
         });
@@ -751,7 +900,7 @@ public class DefaultBlockchain implements MutableBlockchain {
     try {
       final BlockWithReceipts blockWithReceipts = getBlockWithReceipts(blockHeader).get();
 
-      BlockAddedEvent newHeadEvent = handleNewHead(updater, blockWithReceipts);
+      BlockAddedEvent newHeadEvent = handleNewHead(updater, blockWithReceipts, true);
       updateCacheForNewCanonicalHead(
           blockWithReceipts.getBlock(), calculateTotalDifficulty(blockHeader));
       updater.commit();
@@ -791,15 +940,19 @@ public class DefaultBlockchain implements MutableBlockchain {
     chainHeader = block.getHeader();
     totalDifficulty = uInt256;
     chainHeadTransactionCount = block.getBody().getTransactions().size();
-    chainHeadOmmerCount = block.getBody().getOmmers().size();
   }
 
-  private static void indexTransactionForBlock(
-      final BlockchainStorage.Updater updater, final Hash hash, final List<Transaction> txs) {
-    for (int i = 0; i < txs.size(); i++) {
-      final Hash txHash = txs.get(i).getHash();
-      final TransactionLocation loc = new TransactionLocation(hash, i);
-      updater.putTransactionLocation(txHash, loc);
+  private void updateCacheForNewCanonicalHead(final SyncBlock block, final Difficulty uInt256) {
+    chainHeader = block.getHeader();
+    totalDifficulty = uInt256;
+    chainHeadTransactionCount = block.getBody().getTransactionCount();
+  }
+
+  private static void indexTransactionsForBlock(
+      final BlockchainStorage.Updater updater, final Hash blockHash, final List<Hash> txsHashes) {
+    for (int index = 0; index < txsHashes.size(); index++) {
+      final TransactionLocation loc = new TransactionLocation(blockHash, index);
+      updater.putTransactionLocation(txsHashes.get(index), loc);
     }
   }
 
@@ -841,21 +994,21 @@ public class DefaultBlockchain implements MutableBlockchain {
         throw new InvalidConfigurationException(
             "Supplied genesis block does not match chain data stored in "
                 + dataDirectory
-                + ".\n"
+                + "\n"
                 + "Please specify a different data directory with --data-path, specify the original genesis file with "
                 + "--genesis-file or supply a testnet/mainnet option with --network.");
       }
     }
   }
 
-  private boolean blockIsAlreadyTracked(final Block block) {
-    if (block.getHeader().getParentHash().equals(chainHeader.getHash())) {
+  private boolean blockIsAlreadyTracked(final BlockHeader header) {
+    if (header.getParentHash().equals(chainHeader.getHash())) {
       // If this block builds on our chain head it would have a higher TD and be the chain head
       // but since it isn't we mustn't have imported it yet.
       // Saves a db read for the most common case
       return false;
     }
-    return blockchainStorage.getBlockHeader(block.getHash()).isPresent();
+    return blockchainStorage.getBlockHeader(header.getHash()).isPresent();
   }
 
   private boolean blockIsConnected(final Block block) {
@@ -941,5 +1094,44 @@ public class DefaultBlockchain implements MutableBlockchain {
 
   public Optional<Cache<Hash, Difficulty>> getTotalDifficultyCache() {
     return totalDifficultyCache;
+  }
+
+  public BlockchainStorage getBlockchainStorage() {
+    return blockchainStorage;
+  }
+
+  /**
+   * Performs a binary search to find the first existing block number in the blockchain. This method
+   * starts the search from block number 1, as the genesis block (block 0) is assumed to always
+   * exist. It uses the chain head block number as the upper limit for the search.
+   *
+   * <p>The search involves checking the presence of blocks by their numbers, narrowing down the
+   * range until the first existing block is identified. If a block is found, its number is returned
+   * wrapped in an {@code Optional}. If no block is found, an empty {@code Optional} is returned.
+   *
+   * @return an {@code Optional<Long>} containing the number of the first existing block, or {@code
+   *     Optional.empty()} if no block is found.
+   */
+  private Optional<Long> getFirstNonGenesisBlockNumber() {
+    long low = 1;
+    long high = getChainHeadBlockNumber();
+    while (low < high) {
+      long mid = (low + high) / 2;
+      if (getBlockByNumber(mid).isPresent()) {
+        high = mid;
+      } else {
+        low = mid + 1;
+      }
+    }
+    return getBlockByNumber(low)
+        .map(
+            earliestBlock -> {
+              // if the earliestBlock's parent is genesis, we have the whole chain, return the
+              // genesis number
+              if (earliestBlock.getHeader().getNumber() == BlockHeader.GENESIS_BLOCK_NUMBER + 1) {
+                return BlockHeader.GENESIS_BLOCK_NUMBER;
+              }
+              return earliestBlock.getHeader().getNumber();
+            });
   }
 }

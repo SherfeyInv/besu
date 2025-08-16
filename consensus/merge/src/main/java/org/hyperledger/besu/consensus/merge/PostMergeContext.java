@@ -16,6 +16,7 @@ package org.hyperledger.besu.consensus.merge;
 
 import org.hyperledger.besu.consensus.merge.blockcreation.PayloadIdentifier;
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.ConsensusContext;
 import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
@@ -28,7 +29,6 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.EvictingQueue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,7 +40,6 @@ public class PostMergeContext implements MergeContext {
   /** The Max blocks in progress. */
   static final int MAX_BLOCKS_IN_PROGRESS = 12;
 
-  private static final AtomicReference<PostMergeContext> singleton = new AtomicReference<>();
   private final AtomicReference<SyncState> syncState;
   private final AtomicReference<Difficulty> terminalTotalDifficulty;
   // initial postMerge state is indeterminate until it is set:
@@ -62,8 +61,7 @@ public class PostMergeContext implements MergeContext {
   private boolean isPostMergeAtGenesis;
 
   /** Instantiates a new Post merge context. */
-  @VisibleForTesting
-  PostMergeContext() {
+  public PostMergeContext() {
     this(Difficulty.ZERO);
   }
 
@@ -72,22 +70,9 @@ public class PostMergeContext implements MergeContext {
    *
    * @param difficulty the difficulty
    */
-  @VisibleForTesting
-  PostMergeContext(final Difficulty difficulty) {
+  private PostMergeContext(final Difficulty difficulty) {
     this.terminalTotalDifficulty = new AtomicReference<>(difficulty);
     this.syncState = new AtomicReference<>();
-  }
-
-  /**
-   * Get post merge context.
-   *
-   * @return the post merge context
-   */
-  public static PostMergeContext get() {
-    if (singleton.get() == null) {
-      singleton.compareAndSet(null, new PostMergeContext());
-    }
-    return singleton.get();
   }
 
   @Override
@@ -226,13 +211,12 @@ public class PostMergeContext implements MergeContext {
       maybeCurrBestPayload.ifPresent(
           currBestPayload -> {
             if (newBlockValue.greaterThan(currBestPayload.blockValue())) {
-              LOG.atDebug()
+              LOG.atInfo()
                   .setMessage(
-                      "New proposal for payloadId {} {} is better than the previous one {} by {}")
+                      "New proposal for payloadId {} {} is better than the previous one by {}")
                   .addArgument(newPayload.payloadIdentifier())
-                  .addArgument(() -> logBlockProposal(newBlockWithReceipts.getBlock()))
                   .addArgument(
-                      () -> logBlockProposal(currBestPayload.blockWithReceipts().getBlock()))
+                      () -> logBlockProposal(newBlockWithReceipts.getBlock(), newBlockValue))
                   .addArgument(
                       () ->
                           newBlockValue
@@ -277,13 +261,15 @@ public class PostMergeContext implements MergeContext {
     return blocksInProgress.stream().filter(z -> z.payloadIdentifier().equals(payloadId));
   }
 
-  private String logBlockProposal(final Block block) {
+  private String logBlockProposal(final Block block, final Wei value) {
     return "block "
         + block.toLogString()
         + " gas used "
         + block.getHeader().getGasUsed()
         + " transactions "
-        + block.getBody().getTransactions().size();
+        + block.getBody().getTransactions().size()
+        + " reward "
+        + value.toHumanReadableString();
   }
 
   @Override

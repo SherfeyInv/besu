@@ -15,6 +15,7 @@
 package org.hyperledger.besu.ethereum.blockcreation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hyperledger.besu.datatypes.HardforkId.MainnetHardforkId.FRONTIER;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
@@ -25,7 +26,6 @@ import static org.mockito.Mockito.when;
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.blockcreation.BlockCreator.BlockCreationResult;
 import org.hyperledger.besu.ethereum.blockcreation.txselection.TransactionSelectionResults;
-import org.hyperledger.besu.ethereum.chain.BadBlockManager;
 import org.hyperledger.besu.ethereum.chain.MinedBlockObserver;
 import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockBody;
@@ -49,6 +49,8 @@ import org.junit.jupiter.api.Test;
 
 public class BlockMinerTest {
 
+  final ProtocolContext protocolContext = new ProtocolContext.Builder().build();
+
   @Test
   public void blockCreatedIsAddedToBlockChain() throws InterruptedException {
     final BlockHeaderTestFixture headerBuilder = new BlockHeaderTestFixture();
@@ -56,9 +58,6 @@ public class BlockMinerTest {
     final Block blockToCreate =
         new Block(
             headerBuilder.buildHeader(), new BlockBody(Lists.newArrayList(), Lists.newArrayList()));
-
-    final ProtocolContext protocolContext =
-        new ProtocolContext(null, null, null, new BadBlockManager());
 
     final PoWBlockCreator blockCreator = mock(PoWBlockCreator.class);
     final Function<BlockHeader, PoWBlockCreator> blockCreatorSupplier =
@@ -70,7 +69,7 @@ public class BlockMinerTest {
 
     final BlockImporter blockImporter = mock(BlockImporter.class);
     final ProtocolSpec protocolSpec = mock(ProtocolSpec.class);
-
+    when(protocolSpec.getHardforkId()).thenReturn(FRONTIER);
     final ProtocolSchedule protocolSchedule = singleSpecSchedule(protocolSpec);
 
     when(protocolSpec.getBlockImporter()).thenReturn(blockImporter);
@@ -101,9 +100,6 @@ public class BlockMinerTest {
         new Block(
             headerBuilder.buildHeader(), new BlockBody(Lists.newArrayList(), Lists.newArrayList()));
 
-    final ProtocolContext protocolContext =
-        new ProtocolContext(null, null, null, new BadBlockManager());
-
     final PoWBlockCreator blockCreator = mock(PoWBlockCreator.class);
     final Function<BlockHeader, PoWBlockCreator> blockCreatorSupplier =
         (parentHeader) -> blockCreator;
@@ -114,6 +110,7 @@ public class BlockMinerTest {
 
     final BlockImporter blockImporter = mock(BlockImporter.class);
     final ProtocolSpec protocolSpec = mock(ProtocolSpec.class);
+    when(protocolSpec.getHardforkId()).thenReturn(FRONTIER);
     final ProtocolSchedule protocolSchedule = singleSpecSchedule(protocolSpec);
 
     when(protocolSpec.getBlockImporter()).thenReturn(blockImporter);
@@ -149,9 +146,6 @@ public class BlockMinerTest {
         new Block(
             headerBuilder.buildHeader(), new BlockBody(Lists.newArrayList(), Lists.newArrayList()));
 
-    final ProtocolContext protocolContext =
-        new ProtocolContext(null, null, null, new BadBlockManager());
-
     final PoWBlockCreator blockCreator = mock(PoWBlockCreator.class);
     final Function<BlockHeader, PoWBlockCreator> blockCreatorSupplier =
         (parentHeader) -> blockCreator;
@@ -162,6 +156,7 @@ public class BlockMinerTest {
 
     final BlockImporter blockImporter = mock(BlockImporter.class);
     final ProtocolSpec protocolSpec = mock(ProtocolSpec.class);
+    when(protocolSpec.getHardforkId()).thenReturn(FRONTIER);
     final ProtocolSchedule protocolSchedule = singleSpecSchedule(protocolSpec);
 
     when(protocolSpec.getBlockImporter()).thenReturn(blockImporter);

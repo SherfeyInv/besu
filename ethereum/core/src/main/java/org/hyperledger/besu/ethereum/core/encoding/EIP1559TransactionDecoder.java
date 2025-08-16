@@ -18,15 +18,18 @@ import org.hyperledger.besu.crypto.SignatureAlgorithm;
 import org.hyperledger.besu.crypto.SignatureAlgorithmFactory;
 import org.hyperledger.besu.datatypes.AccessListEntry;
 import org.hyperledger.besu.datatypes.Address;
+import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.TransactionType;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.core.Transaction;
+import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.rlp.RLPInput;
 
 import java.math.BigInteger;
 import java.util.function.Supplier;
 
 import com.google.common.base.Suppliers;
+import org.apache.tuweni.bytes.Bytes;
 
 public class EIP1559TransactionDecoder {
   private static final Supplier<SignatureAlgorithm> SIGNATURE_ALGORITHM =
@@ -36,22 +39,24 @@ public class EIP1559TransactionDecoder {
     // private constructor
   }
 
-  public static Transaction decode(final RLPInput input) {
-    input.enterList();
-    final BigInteger chainId = input.readBigIntegerScalar();
+  public static Transaction decode(final Bytes input) {
+    final RLPInput txRlp = RLP.input(input.slice(1)); // Skip the transaction type byte
+    txRlp.enterList();
+    final BigInteger chainId = txRlp.readBigIntegerScalar();
     final Transaction.Builder builder =
         Transaction.builder()
             .type(TransactionType.EIP1559)
             .chainId(chainId)
-            .nonce(input.readLongScalar())
-            .maxPriorityFeePerGas(Wei.of(input.readUInt256Scalar()))
-            .maxFeePerGas(Wei.of(input.readUInt256Scalar()))
-            .gasLimit(input.readLongScalar())
-            .to(input.readBytes(v -> v.isEmpty() ? null : Address.wrap(v)))
-            .value(Wei.of(input.readUInt256Scalar()))
-            .payload(input.readBytes())
+            .nonce(txRlp.readLongScalar())
+            .maxPriorityFeePerGas(Wei.of(txRlp.readUInt256Scalar()))
+            .maxFeePerGas(Wei.of(txRlp.readUInt256Scalar()))
+            .gasLimit(txRlp.readLongScalar())
+            .to(txRlp.readBytes(v -> v.isEmpty() ? null : Address.wrap(v)))
+            .value(Wei.of(txRlp.readUInt256Scalar()))
+            .payload(txRlp.readBytes())
+            .rawRlp(txRlp.raw())
             .accessList(
-                input.readList(
+                txRlp.readList(
                     accessListEntryRLPInput -> {
                       accessListEntryRLPInput.enterList();
                       final AccessListEntry accessListEntry =
@@ -60,19 +65,22 @@ public class EIP1559TransactionDecoder {
                               accessListEntryRLPInput.readList(RLPInput::readBytes32));
                       accessListEntryRLPInput.leaveList();
                       return accessListEntry;
-                    }));
-    final byte recId = (byte) input.readUnsignedByteScalar();
+                    }))
+            .sizeForAnnouncement(input.size())
+            .sizeForBlockInclusion(input.size())
+            .hash(Hash.hash(input));
+    final byte recId = (byte) txRlp.readUnsignedByteScalar();
     final Transaction transaction =
         builder
             .signature(
                 SIGNATURE_ALGORITHM
                     .get()
                     .createSignature(
-                        input.readUInt256Scalar().toUnsignedBigInteger(),
-                        input.readUInt256Scalar().toUnsignedBigInteger(),
+                        txRlp.readUInt256Scalar().toUnsignedBigInteger(),
+                        txRlp.readUInt256Scalar().toUnsignedBigInteger(),
                         recId))
             .build();
-    input.leaveList();
+    txRlp.leaveList();
     return transaction;
   }
 }

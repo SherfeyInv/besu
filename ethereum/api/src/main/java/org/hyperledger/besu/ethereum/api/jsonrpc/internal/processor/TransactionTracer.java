@@ -25,11 +25,9 @@ import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.MutableWorldState;
 import org.hyperledger.besu.ethereum.core.Transaction;
-import org.hyperledger.besu.ethereum.debug.TraceOptions;
 import org.hyperledger.besu.ethereum.mainnet.ImmutableTransactionValidationParams;
 import org.hyperledger.besu.ethereum.mainnet.MainnetTransactionProcessor;
 import org.hyperledger.besu.ethereum.processing.TransactionProcessingResult;
-import org.hyperledger.besu.ethereum.vm.CachingBlockHashLookup;
 import org.hyperledger.besu.ethereum.vm.DebugOperationTracer;
 import org.hyperledger.besu.evm.tracing.OperationTracer;
 import org.hyperledger.besu.evm.tracing.StandardJsonTracer;
@@ -99,7 +97,7 @@ public class TransactionTracer {
     final boolean showMemory =
         transactionTraceParams
             .map(TransactionTraceParams::traceOptions)
-            .map(TraceOptions::isMemoryEnabled)
+            .map(options -> options.opCodeTracerConfig().traceMemory())
             .orElse(true);
 
     if (!Files.isDirectory(traceDir) && !traceDir.toFile().mkdirs()) {
@@ -136,7 +134,7 @@ public class TransactionTracer {
                             stackedUpdater,
                             transaction,
                             transactionProcessor,
-                            new StandardJsonTracer(out, showMemory, true, true, false),
+                            new StandardJsonTracer(out, showMemory, true, true, false, true),
                             blobGasPrice);
                     out.println(
                         summaryTrace(
@@ -192,8 +190,10 @@ public class TransactionTracer {
         transaction,
         header.getCoinbase(),
         tracer,
-        new CachingBlockHashLookup(header, blockchain),
-        false,
+        blockReplay
+            .getProtocolSpec(header)
+            .getPreExecutionProcessor()
+            .createBlockHashLookup(blockchain, header),
         ImmutableTransactionValidationParams.builder().isAllowFutureNonce(true).build(),
         blobGasPrice);
   }

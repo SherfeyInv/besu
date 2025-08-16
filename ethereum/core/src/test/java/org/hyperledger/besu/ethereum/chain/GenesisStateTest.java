@@ -31,7 +31,6 @@ import java.util.stream.Stream;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.bigints.UInt256;
-import org.apache.tuweni.units.bigints.UInt64;
 import org.bouncycastle.util.encoders.Hex;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtensionContext;
@@ -69,7 +68,7 @@ final class GenesisStateTest {
         GenesisState.fromJsonSource(
             dataStorageConfiguration,
             GenesisStateTest.class.getResource("genesis1.json"),
-            ProtocolScheduleFixture.MAINNET);
+            ProtocolScheduleFixture.TESTING_NETWORK);
     final BlockHeader header = genesisState.getBlock().getHeader();
     assertThat(header.getStateRoot())
         .isEqualTo(
@@ -99,7 +98,7 @@ final class GenesisStateTest {
         GenesisState.fromJsonSource(
             dataStorageConfiguration,
             GenesisStateTest.class.getResource("genesis2.json"),
-            ProtocolScheduleFixture.MAINNET);
+            ProtocolScheduleFixture.TESTING_NETWORK);
     final BlockHeader header = genesisState.getBlock().getHeader();
     assertThat(header.getStateRoot()).isEqualTo(Hash.EMPTY_TRIE_HASH);
     assertThat(header.getTransactionsRoot()).isEqualTo(Hash.EMPTY_TRIE_HASH);
@@ -117,7 +116,7 @@ final class GenesisStateTest {
         GenesisState.fromJsonSource(
             dataStorageConfiguration,
             GenesisStateTest.class.getResource(sourceFile),
-            ProtocolScheduleFixture.MAINNET);
+            ProtocolScheduleFixture.TESTING_NETWORK);
     final BlockHeader header = genesisState.getBlock().getHeader();
     assertThat(header.getHash()).isEqualTo(Hash.fromHexString(blockHash));
 
@@ -152,7 +151,7 @@ final class GenesisStateTest {
         GenesisState.fromJsonSource(
             dataStorageConfiguration,
             GenesisStateTest.class.getResource("genesisNonce.json"),
-            ProtocolScheduleFixture.MAINNET);
+            ProtocolScheduleFixture.TESTING_NETWORK);
     final BlockHeader header = genesisState.getBlock().getHeader();
     assertThat(header.getHash())
         .isEqualTo(
@@ -167,7 +166,7 @@ final class GenesisStateTest {
         GenesisState.fromJsonSource(
             dataStorageConfiguration,
             GenesisStateTest.class.getResource("genesis-olympic.json"),
-            ProtocolScheduleFixture.MAINNET);
+            ProtocolScheduleFixture.TESTING_NETWORK);
     final BytesValueRLPOutput tmp = new BytesValueRLPOutput();
     genesisState.getBlock().writeTo(tmp);
     assertThat(Hex.toHexString(genesisState.getBlock().getHeader().getHash().toArray()))
@@ -187,7 +186,7 @@ final class GenesisStateTest {
         GenesisState.fromJsonSource(
             dataStorageConfiguration,
             GenesisStateTest.class.getResource("genesis_shanghai.json"),
-            ProtocolScheduleFixture.MAINNET);
+            ProtocolScheduleFixture.TESTING_NETWORK);
     final BlockHeader header = genesisState.getBlock().getHeader();
     assertThat(header.getHash())
         .isEqualTo(
@@ -236,7 +235,7 @@ final class GenesisStateTest {
         GenesisState.fromJsonSource(
             dataStorageConfiguration,
             GenesisStateTest.class.getResource("genesis_cancun.json"),
-            ProtocolScheduleFixture.MAINNET);
+            ProtocolScheduleFixture.TESTING_NETWORK);
     final BlockHeader header = genesisState.getBlock().getHeader();
     assertThat(header.getHash())
         .isEqualTo(
@@ -286,8 +285,12 @@ final class GenesisStateTest {
         GenesisState.fromJsonSource(
             dataStorageConfiguration,
             GenesisStateTest.class.getResource("genesis_prague.json"),
-            ProtocolScheduleFixture.MAINNET);
+            ProtocolScheduleFixture.TESTING_NETWORK);
     final BlockHeader header = genesisState.getBlock().getHeader();
+    assertThat(header.getHash())
+        .isEqualTo(
+            Hash.fromHexString(
+                "0x5d2d02fce02d1b7ca635ec91a4fe6f7aa36f9b3997ec4304e8c68d8f6f15d266"));
     assertThat(header.getGasLimit()).isEqualTo(0x2fefd8);
     assertThat(header.getGasUsed()).isZero();
     assertThat(header.getNumber()).isZero();
@@ -327,14 +330,7 @@ final class GenesisStateTest {
     assertThat(header.getRequestsHash().get())
         .isEqualTo(
             Hash.fromHexString(
-                "0x6036c41849da9c076ed79654d434017387a88fb833c2856b32e18218b3341c5f"));
-    assertThat(header.getTargetBlobCount().isPresent()).isTrue();
-    assertThat(header.getTargetBlobCount().get()).isEqualTo(UInt64.ONE);
-
-    assertThat(header.getHash())
-        .isEqualTo(
-            Hash.fromHexString(
-                "0xdbc64edecb3a432e48cbd270b4a248ffc611b5f3dd666c8a10d546672cae17bd"));
+                "0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"));
   }
 
   @Test

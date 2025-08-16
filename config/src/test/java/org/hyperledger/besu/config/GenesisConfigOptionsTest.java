@@ -213,6 +213,36 @@ class GenesisConfigOptionsTest {
   }
 
   @Test
+  void shouldGetBpo1Time() {
+    final GenesisConfigOptions config = fromConfigOptions(singletonMap("bpo1Time", 1670470144));
+    assertThat(config.getBpo1Time()).hasValue(1670470144);
+  }
+
+  @Test
+  void shouldGetBpo2Time() {
+    final GenesisConfigOptions config = fromConfigOptions(singletonMap("bpo2Time", 1670470144));
+    assertThat(config.getBpo2Time()).hasValue(1670470144);
+  }
+
+  @Test
+  void shouldGetBpo3Time() {
+    final GenesisConfigOptions config = fromConfigOptions(singletonMap("bpo3Time", 1670470144));
+    assertThat(config.getBpo3Time()).hasValue(1670470144);
+  }
+
+  @Test
+  void shouldGetBpo4Time() {
+    final GenesisConfigOptions config = fromConfigOptions(singletonMap("bpo4Time", 1670470144));
+    assertThat(config.getBpo4Time()).hasValue(1670470144);
+  }
+
+  @Test
+  void shouldGetBpo5Time() {
+    final GenesisConfigOptions config = fromConfigOptions(singletonMap("bpo5Time", 1670470144));
+    assertThat(config.getBpo5Time()).hasValue(1670470144);
+  }
+
+  @Test
   void shouldGetFutureEipsTime() {
     final GenesisConfigOptions config = fromConfigOptions(singletonMap("futureEipsTime", 1337));
     assertThat(config.getFutureEipsTime()).hasValue(1337);
@@ -247,6 +277,11 @@ class GenesisConfigOptionsTest {
     assertThat(config.getCancunEOFTime()).isEmpty();
     assertThat(config.getPragueTime()).isEmpty();
     assertThat(config.getOsakaTime()).isEmpty();
+    assertThat(config.getBpo1Time()).isEmpty();
+    assertThat(config.getBpo2Time()).isEmpty();
+    assertThat(config.getBpo3Time()).isEmpty();
+    assertThat(config.getBpo4Time()).isEmpty();
+    assertThat(config.getBpo5Time()).isEmpty();
     assertThat(config.getFutureEipsTime()).isEmpty();
     assertThat(config.getExperimentalEipsTime()).isEmpty();
   }
@@ -260,7 +295,7 @@ class GenesisConfigOptionsTest {
 
   @Test
   void shouldSupportEmptyGenesisConfig() {
-    final GenesisConfigOptions config = GenesisConfigFile.fromConfig("{}").getConfigOptions();
+    final GenesisConfigOptions config = GenesisConfig.fromConfig("{}").getConfigOptions();
     assertThat(config.isEthHash()).isFalse();
     assertThat(config.isClique()).isFalse();
     assertThat(config.isPoa()).isFalse();
@@ -291,7 +326,7 @@ class GenesisConfigOptionsTest {
 
   @Test
   void isZeroBaseFeeShouldDefaultToFalse() {
-    final GenesisConfigOptions config = GenesisConfigFile.fromConfig("{}").getConfigOptions();
+    final GenesisConfigOptions config = GenesisConfig.fromConfig("{}").getConfigOptions();
 
     assertThat(config.isZeroBaseFee()).isFalse();
   }
@@ -312,7 +347,7 @@ class GenesisConfigOptionsTest {
 
   @Test
   void isFixedBaseFeeShouldDefaultToFalse() {
-    final GenesisConfigOptions config = GenesisConfigFile.fromConfig("{}").getConfigOptions();
+    final GenesisConfigOptions config = GenesisConfig.fromConfig("{}").getConfigOptions();
 
     assertThat(config.isFixedBaseFee()).isFalse();
   }
@@ -333,12 +368,12 @@ class GenesisConfigOptionsTest {
 
   @Test
   void shouldGetWithdrawalRequestContractAddress() {
+
+    final String address = "0x0000000000000000111111119cbe0530deadbeef";
     final GenesisConfigOptions config =
-        fromConfigOptions(
-            singletonMap(
-                "withdrawalRequestContractAddress", "0x00000000219ab540356cbb839cbe05303d7705fa"));
+        fromConfigOptions(singletonMap("withdrawalRequestContractAddress", address));
     assertThat(config.getWithdrawalRequestContractAddress())
-        .hasValue(Address.fromHexString("0x00000000219ab540356cbb839cbe05303d7705fa"));
+        .hasValue(Address.fromHexString(address));
   }
 
   @Test
@@ -359,11 +394,10 @@ class GenesisConfigOptionsTest {
 
   @Test
   void shouldGetDepositContractAddress() {
+    final String address = "0x00000000deadbeefdeadbeef0000000011111111";
     final GenesisConfigOptions config =
-        fromConfigOptions(
-            singletonMap("depositContractAddress", "0x00000000219ab540356cbb839cbe05303d7705fa"));
-    assertThat(config.getDepositContractAddress())
-        .hasValue(Address.fromHexString("0x00000000219ab540356cbb839cbe05303d7705fa"));
+        fromConfigOptions(singletonMap("depositContractAddress", address));
+    assertThat(config.getDepositContractAddress()).hasValue(Address.fromHexString(address));
   }
 
   @Test
@@ -408,10 +442,53 @@ class GenesisConfigOptionsTest {
         .containsValue(Address.ZERO);
   }
 
+  @SuppressWarnings("unchecked")
+  @Test
+  void asMapIncludesBlobFeeSchedule() {
+    final GenesisConfigOptions config =
+        GenesisConfig.fromConfig(
+                "{\n"
+                    + "  \"config\": {\n"
+                    + "    \"blobSchedule\": {\n"
+                    + "      \"cancun\": {\n"
+                    + "        \"target\": 1,\n"
+                    + "        \"max\": 2,\n"
+                    + "        \"baseFeeUpdateFraction\": 3\n"
+                    + "      },\n"
+                    + "      \"prague\": {\n"
+                    + "        \"target\": 4,\n"
+                    + "        \"max\": 5,\n"
+                    + "        \"baseFeeUpdateFraction\": 6\n"
+                    + "      },\n"
+                    + "      \"osaka\": {\n"
+                    + "        \"target\": 7,\n"
+                    + "        \"max\": 8,\n"
+                    + "        \"baseFeeUpdateFraction\": 9\n"
+                    + "      }\n"
+                    + "    }\n"
+                    + "  }\n"
+                    + "}")
+            .getConfigOptions();
+
+    final Map<String, Object> map = config.asMap();
+    assertThat(map).containsOnlyKeys("blobSchedule");
+    final Map<String, Object> blobSchedule = (Map<String, Object>) map.get("blobSchedule");
+    assertThat(blobSchedule).containsOnlyKeys("cancun", "prague", "osaka");
+    assertThat((Map<String, Object>) blobSchedule.get("cancun"))
+        .containsOnlyKeys("target", "max", "baseFeeUpdateFraction")
+        .containsValues(1, 2, 3);
+    assertThat((Map<String, Object>) blobSchedule.get("prague"))
+        .containsOnlyKeys("target", "max", "baseFeeUpdateFraction")
+        .containsValues(4, 5, 6);
+    assertThat((Map<String, Object>) blobSchedule.get("osaka"))
+        .containsOnlyKeys("target", "max", "baseFeeUpdateFraction")
+        .containsValues(7, 8, 9);
+  }
+
   private GenesisConfigOptions fromConfigOptions(final Map<String, Object> configOptions) {
     final ObjectNode rootNode = JsonUtil.createEmptyObjectNode();
     final ObjectNode options = JsonUtil.objectNodeFromMap(configOptions);
     rootNode.set("config", options);
-    return GenesisConfigFile.fromConfig(rootNode).getConfigOptions();
+    return GenesisConfig.fromConfig(rootNode).getConfigOptions();
   }
 }

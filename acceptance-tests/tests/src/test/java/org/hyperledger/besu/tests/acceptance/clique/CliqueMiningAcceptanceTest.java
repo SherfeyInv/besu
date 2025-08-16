@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.web3j.protocol.core.DefaultBlockParameter;
 
@@ -82,6 +83,7 @@ public class CliqueMiningAcceptanceTest extends AcceptanceTestBase {
   }
 
   @Test
+  @Disabled("flaky see https://github.com/hyperledger/besu/issues/8862")
   public void shouldMineTransactionsOnMultipleNodes() throws IOException {
     final BesuNode minerNode1 = besu.createCliqueNode("miner1");
     final BesuNode minerNode2 = besu.createCliqueNode("miner2");
@@ -120,6 +122,11 @@ public class CliqueMiningAcceptanceTest extends AcceptanceTestBase {
       final BesuNode minerNode1, final BesuNode minerNode2, final BesuNode minerNode3) {
     cluster.start(minerNode1, minerNode2, minerNode3);
 
+    // verify nodes are fully connected otherwise blocks could not be propagated
+    minerNode1.verify(net.awaitPeerCount(2));
+    minerNode2.verify(net.awaitPeerCount(2));
+    minerNode3.verify(net.awaitPeerCount(2));
+
     // verify that we have started producing blocks
     waitForBlockHeight(minerNode1, 1);
     final var minerChainHead = minerNode1.execute(ethTransactions.block());
@@ -128,6 +135,7 @@ public class CliqueMiningAcceptanceTest extends AcceptanceTestBase {
   }
 
   @Test
+  @Disabled("flaky see https://github.com/hyperledger/besu/issues/8862")
   public void shouldStillMineWhenANodeFailsAndHasSufficientValidators() throws IOException {
     final BesuNode minerNode1 = besu.createCliqueNode("miner1");
     final BesuNode minerNode2 = besu.createCliqueNode("miner2");

@@ -17,7 +17,7 @@ package org.hyperledger.besu.ethereum.core;
 import static org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider.createBonsaiInMemoryWorldStateArchive;
 import static org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider.createInMemoryWorldStateArchive;
 
-import org.hyperledger.besu.config.GenesisConfigFile;
+import org.hyperledger.besu.config.GenesisConfig;
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.chain.BadBlockManager;
 import org.hyperledger.besu.ethereum.chain.DefaultBlockchain;
@@ -29,6 +29,7 @@ import org.hyperledger.besu.ethereum.mainnet.ProtocolScheduleBuilder;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSpecAdapters;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStoragePrefixedKeyBlockchainStorage;
 import org.hyperledger.besu.ethereum.storage.keyvalue.VariablesKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateArchive;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
@@ -52,12 +53,13 @@ public class ExecutionContextTestFixture {
   private final ProtocolContext protocolContext;
 
   private ExecutionContextTestFixture(
-      final GenesisConfigFile genesisConfigFile,
+      final GenesisConfig genesisConfig,
       final ProtocolSchedule protocolSchedule,
       final KeyValueStorage blockchainKeyValueStorage,
       final KeyValueStorage variablesKeyValueStorage,
       final Optional<DataStorageFormat> dataStorageFormat) {
-    final GenesisState genesisState = GenesisState.fromConfig(genesisConfigFile, protocolSchedule);
+    final GenesisState genesisState =
+        GenesisState.fromConfig(genesisConfig, protocolSchedule, new CodeCache());
     this.genesis = genesisState.getBlock();
     this.blockchainKeyValueStorage = blockchainKeyValueStorage;
     this.variablesKeyValueStorage = variablesKeyValueStorage;
@@ -76,16 +78,20 @@ public class ExecutionContextTestFixture {
     else this.stateArchive = createInMemoryWorldStateArchive();
     this.protocolSchedule = protocolSchedule;
     this.protocolContext =
-        new ProtocolContext(blockchain, stateArchive, null, new BadBlockManager());
-    genesisState.writeStateTo(stateArchive.getMutable());
+        new ProtocolContext.Builder()
+            .withBlockchain(blockchain)
+            .withWorldStateArchive(stateArchive)
+            .withConsensusContext(new ConsensusContextFixture())
+            .build();
+    genesisState.writeStateTo(stateArchive.getWorldState());
   }
 
   public static ExecutionContextTestFixture create() {
-    return new Builder(GenesisConfigFile.mainnet()).build();
+    return new Builder(GenesisConfig.mainnet()).build();
   }
 
-  public static Builder builder(final GenesisConfigFile genesisConfigFile) {
-    return new Builder(genesisConfigFile);
+  public static Builder builder(final GenesisConfig genesisConfig) {
+    return new Builder(genesisConfig);
   }
 
   public Block getGenesis() {
@@ -117,14 +123,14 @@ public class ExecutionContextTestFixture {
   }
 
   public static class Builder {
-    private final GenesisConfigFile genesisConfigFile;
+    private final GenesisConfig genesisConfig;
     private KeyValueStorage variablesKeyValueStorage;
     private KeyValueStorage blockchainKeyValueStorage;
     private ProtocolSchedule protocolSchedule;
     private Optional<DataStorageFormat> dataStorageFormat = Optional.empty();
 
-    public Builder(final GenesisConfigFile genesisConfigFile) {
-      this.genesisConfigFile = genesisConfigFile;
+    public Builder(final GenesisConfig genesisConfig) {
+      this.genesisConfig = genesisConfig;
     }
 
     public Builder variablesKeyValueStorage(final KeyValueStorage keyValueStorage) {
@@ -151,13 +157,12 @@ public class ExecutionContextTestFixture {
       if (protocolSchedule == null) {
         protocolSchedule =
             new ProtocolScheduleBuilder(
-                    genesisConfigFile.getConfigOptions(),
+                    genesisConfig.getConfigOptions(),
                     Optional.of(BigInteger.valueOf(42)),
                     ProtocolSpecAdapters.create(0, Function.identity()),
-                    new PrivacyParameters(),
                     false,
                     EvmConfiguration.DEFAULT,
-                    MiningParameters.MINING_DISABLED,
+                    MiningConfiguration.MINING_DISABLED,
                     new BadBlockManager(),
                     false,
                     new NoOpMetricsSystem())
@@ -171,7 +176,7 @@ public class ExecutionContextTestFixture {
       }
 
       return new ExecutionContextTestFixture(
-          genesisConfigFile,
+          genesisConfig,
           protocolSchedule,
           variablesKeyValueStorage,
           blockchainKeyValueStorage,

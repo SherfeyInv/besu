@@ -30,6 +30,7 @@ import org.hyperledger.besu.datatypes.VersionedHash;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.mainnet.BodyValidation;
 import org.hyperledger.besu.ethereum.mainnet.MainnetBlockHeaderFunctions;
+import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateArchive;
 import org.hyperledger.besu.evm.account.Account;
 import org.hyperledger.besu.evm.account.MutableAccount;
@@ -124,7 +125,7 @@ public class BlockDataGenerator {
       final List<UInt256> storageKeys) {
     final List<Block> seq = new ArrayList<>(count);
 
-    final MutableWorldState worldState = worldStateArchive.getMutable();
+    final MutableWorldState worldState = worldStateArchive.getWorldState();
 
     long nextBlockNumber = nextBlock;
     Hash parentHash = parent;
@@ -753,6 +754,19 @@ public class BlockDataGenerator {
 
     public BlockOptions setWithdrawals(final Optional<List<Withdrawal>> withdrawals) {
       this.withdrawals = Optional.of(withdrawals);
+      if (withdrawals.isPresent()) {
+        final List<Withdrawal> withdrawalList = withdrawals.get();
+        final ArrayList<Bytes> bytesList = new ArrayList<>(withdrawalList.size());
+        withdrawalList.forEach(
+            w -> {
+              final BytesValueRLPOutput rlpOutput = new BytesValueRLPOutput();
+              w.writeTo(rlpOutput);
+              bytesList.add(rlpOutput.encoded());
+            });
+        this.withdrawalsRoot = Optional.of(Util.getRootFromListOfBytes(bytesList));
+      } else {
+        this.withdrawalsRoot = Optional.empty();
+      }
       return this;
     }
 

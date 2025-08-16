@@ -14,23 +14,19 @@
  */
 package org.hyperledger.besu.consensus.merge;
 
-import org.hyperledger.besu.config.GenesisConfigOptions;
 import org.hyperledger.besu.datatypes.HardforkId;
 import org.hyperledger.besu.ethereum.ProtocolContext;
-import org.hyperledger.besu.ethereum.chain.BadBlockManager;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.Difficulty;
-import org.hyperledger.besu.ethereum.core.MiningParameters;
 import org.hyperledger.besu.ethereum.core.PermissionTransactionFilter;
 import org.hyperledger.besu.ethereum.core.ProcessableBlockHeader;
-import org.hyperledger.besu.ethereum.mainnet.MainnetProtocolSchedule;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSpec;
 import org.hyperledger.besu.ethereum.mainnet.ScheduledProtocolSpec;
-import org.hyperledger.besu.ethereum.worldstate.WorldStateArchive;
-import org.hyperledger.besu.plugin.services.MetricsSystem;
+import org.hyperledger.besu.plugin.services.txvalidator.TransactionValidationRule;
 
 import java.math.BigInteger;
+import java.util.List;
 import java.util.Optional;
 import java.util.function.Predicate;
 
@@ -61,41 +57,6 @@ public class TransitionProtocolSchedule implements ProtocolSchedule {
   }
 
   /**
-   * Create a Proof-of-Stake protocol schedule from a config object
-   *
-   * @param genesisConfigOptions {@link GenesisConfigOptions} containing the config options for the
-   *     milestone starting points
-   * @param miningParameters the mining parameters
-   * @param badBlockManager the cache to use to keep invalid blocks
-   * @param isParallelTxProcessingEnabled indicates whether parallel transaction is enabled.
-   * @return an initialised TransitionProtocolSchedule using post-merge defaults
-   */
-  public static TransitionProtocolSchedule fromConfig(
-      final GenesisConfigOptions genesisConfigOptions,
-      final MiningParameters miningParameters,
-      final BadBlockManager badBlockManager,
-      final boolean isParallelTxProcessingEnabled,
-      final MetricsSystem metricsSystem) {
-    ProtocolSchedule preMergeProtocolSchedule =
-        MainnetProtocolSchedule.fromConfig(
-            genesisConfigOptions,
-            miningParameters,
-            badBlockManager,
-            isParallelTxProcessingEnabled,
-            metricsSystem);
-    ProtocolSchedule postMergeProtocolSchedule =
-        MergeProtocolSchedule.create(
-            genesisConfigOptions,
-            false,
-            miningParameters,
-            badBlockManager,
-            isParallelTxProcessingEnabled,
-            metricsSystem);
-    return new TransitionProtocolSchedule(
-        preMergeProtocolSchedule, postMergeProtocolSchedule, PostMergeContext.get());
-  }
-
-  /**
    * Gets pre merge schedule.
    *
    * @return the pre merge schedule
@@ -120,7 +81,8 @@ public class TransitionProtocolSchedule implements ProtocolSchedule {
    * @return the ProtocolSpec to be used by the provided block
    */
   @Override
-  public ProtocolSpec getByBlockHeader(final ProcessableBlockHeader blockHeader) {
+  public ProtocolSpec getByBlockHeader(
+      final org.hyperledger.besu.plugin.data.ProcessableBlockHeader blockHeader) {
     return this.transitionUtils.dispatchFunctionAccordingToMergeState(
         protocolSchedule -> protocolSchedule.getByBlockHeader(blockHeader));
   }
@@ -262,18 +224,12 @@ public class TransitionProtocolSchedule implements ProtocolSchedule {
             protocolSchedule.setPermissionTransactionFilter(permissionTransactionFilter));
   }
 
-  /**
-   * Sets public world state archive for privacy block processor.
-   *
-   * @param publicWorldStateArchive the public world state archive
-   */
   @Override
-  public void setPublicWorldStateArchiveForPrivacyBlockProcessor(
-      final WorldStateArchive publicWorldStateArchive) {
+  public void setAdditionalValidationRules(
+      final List<TransactionValidationRule> additionalValidationRules) {
     transitionUtils.dispatchConsumerAccordingToMergeState(
         protocolSchedule ->
-            protocolSchedule.setPublicWorldStateArchiveForPrivacyBlockProcessor(
-                publicWorldStateArchive));
+            protocolSchedule.setAdditionalValidationRules(additionalValidationRules));
   }
 
   /**
@@ -283,5 +239,15 @@ public class TransitionProtocolSchedule implements ProtocolSchedule {
    */
   public void setProtocolContext(final ProtocolContext protocolContext) {
     this.protocolContext = protocolContext;
+  }
+
+  @Override
+  public Optional<ScheduledProtocolSpec> getNextProtocolSpec(final long currentTime) {
+    return getPostMergeSchedule().getNextProtocolSpec(currentTime);
+  }
+
+  @Override
+  public Optional<ScheduledProtocolSpec> getLatestProtocolSpec() {
+    return getPostMergeSchedule().getLatestProtocolSpec();
   }
 }

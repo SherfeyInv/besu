@@ -18,6 +18,7 @@ import org.hyperledger.besu.ethereum.eth.manager.EthPeer;
 import org.hyperledger.besu.ethereum.p2p.rlpx.wire.MessageData;
 import org.hyperledger.besu.ethereum.p2p.rlpx.wire.SubProtocol;
 
+import java.time.Duration;
 import java.util.function.Predicate;
 
 /**
@@ -68,6 +69,15 @@ public interface PeerTask<T> {
   }
 
   /**
+   * Gets the delay between retries against the same peer
+   *
+   * @return the delay between retries against the same peer
+   */
+  default Duration getDelayBetweenSamePeerRetries() {
+    return Duration.ofSeconds(1);
+  }
+
+  /**
    * Gets a Predicate that checks if an EthPeer is suitable for this PeerTask
    *
    * @return a Predicate that checks if an EthPeer is suitable for this PeerTask
@@ -75,9 +85,13 @@ public interface PeerTask<T> {
   Predicate<EthPeer> getPeerRequirementFilter();
 
   /**
-   * Checks if the supplied result is considered a success
+   * Performs a high level check of the results, returning a PeerTaskValidationResponse to describe
+   * the result of the check
    *
-   * @return true if the supplied result is considered a success
+   * @param result The results of the PeerTask, as returned by processResponse
+   * @return a PeerTaskValidationResponse to describe the result of the check
    */
-  boolean isSuccess(T result);
+  PeerTaskValidationResponse validateResult(T result);
+
+  default void postProcessResult(final PeerTaskExecutorResult<T> result) {}
 }

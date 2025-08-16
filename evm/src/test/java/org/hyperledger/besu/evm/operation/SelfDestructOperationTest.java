@@ -30,7 +30,6 @@ import org.hyperledger.besu.evm.frame.BlockValues;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.ConstantinopleGasCalculator;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
-import org.hyperledger.besu.evm.internal.Words;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -55,7 +54,7 @@ public class SelfDestructOperationTest {
   @Mock private WorldUpdater worldUpdater;
   @Mock private MutableAccount accountOriginator;
   @Mock private MutableAccount accountBeneficiary;
-  private final EVM evm = MainnetEVMs.osaka(EvmConfiguration.DEFAULT);
+  private final EVM evm = MainnetEVMs.futureEips(EvmConfiguration.DEFAULT);
 
   private final SelfDestructOperation frontierOperation =
       new SelfDestructOperation(new ConstantinopleGasCalculator());
@@ -79,10 +78,10 @@ public class SelfDestructOperationTest {
             .sender(beneficiaryAddress)
             .value(Wei.ZERO)
             .apparentValue(Wei.ZERO)
-            .code(evm.getCodeUncached(SELFDESTRUCT_CODE))
+            .code(evm.wrapCode(SELFDESTRUCT_CODE))
             .completer(__ -> {})
             .address(originatorAddress)
-            .blockHashLookup(n -> Hash.hash(Words.longBytes(n)))
+            .blockHashLookup((__, ___) -> Hash.ZERO)
             .blockValues(mock(BlockValues.class))
             .gasPrice(Wei.ZERO)
             .miningBeneficiary(Address.ZERO)

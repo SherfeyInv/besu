@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.eth.manager.snap;
 
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.ProtocolContext;
+import org.hyperledger.besu.ethereum.core.Synchronizer;
 import org.hyperledger.besu.ethereum.eth.manager.EthMessages;
 import org.hyperledger.besu.ethereum.eth.messages.snap.AccountRangeMessage;
 import org.hyperledger.besu.ethereum.eth.messages.snap.ByteCodesMessage;
@@ -33,12 +34,11 @@ import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.trie.CompactEncoding;
 import org.hyperledger.besu.ethereum.trie.MerkleTrie;
-import org.hyperledger.besu.ethereum.trie.diffbased.bonsai.BonsaiWorldStateProvider;
-import org.hyperledger.besu.ethereum.trie.diffbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.BonsaiWorldStateProvider;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.plugin.services.BesuEvents;
-import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -46,6 +46,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.NavigableMap;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
@@ -62,7 +63,7 @@ import org.apache.tuweni.units.bigints.UInt256;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** See https://github.com/ethereum/devp2p/blob/master/caps/snap.md */
+/** See <a href="https://github.com/ethereum/devp2p/blob/master/caps/snap.md">snap</a> */
 class SnapServer implements BesuEvents.InitialSyncCompletionListener {
   private static final Logger LOGGER = LoggerFactory.getLogger(SnapServer.class);
   private static final int PRIME_STATE_ROOT_CACHE_LIMIT = 128;
@@ -98,7 +99,8 @@ class SnapServer implements BesuEvents.InitialSyncCompletionListener {
       final SnapSyncConfiguration snapConfig,
       final EthMessages snapMessages,
       final WorldStateStorageCoordinator worldStateStorageCoordinator,
-      final ProtocolContext protocolContext) {
+      final ProtocolContext protocolContext,
+      final Synchronizer synchronizer) {
     this.snapServerEnabled =
         Optional.ofNullable(snapConfig)
             .map(SnapSyncConfiguration::isSnapServerEnabled)
@@ -110,7 +112,7 @@ class SnapServer implements BesuEvents.InitialSyncCompletionListener {
 
     // subscribe to initial sync completed events to start/stop snap server,
     // not saving the listenerId since we never need to unsubscribe.
-    protocolContext.getSynchronizer().subscribeInitialSync(this);
+    synchronizer.subscribeInitialSync(this);
   }
 
   /**
@@ -143,8 +145,9 @@ class SnapServer implements BesuEvents.InitialSyncCompletionListener {
     if (!isStarted.get() && snapServerEnabled) {
       // if we are bonsai and full flat, we can provide a worldstate storage:
       var worldStateKeyValueStorage = worldStateStorageCoordinator.worldStateKeyValueStorage();
-      if (worldStateKeyValueStorage.getDataStorageFormat().equals(DataStorageFormat.BONSAI)
-          && worldStateStorageCoordinator.isMatchingFlatMode(FlatDbMode.FULL)) {
+      if (worldStateKeyValueStorage.getDataStorageFormat().isBonsaiFormat()
+          && (worldStateStorageCoordinator.isMatchingFlatMode(FlatDbMode.FULL)
+              || worldStateStorageCoordinator.isMatchingFlatMode(FlatDbMode.ARCHIVE))) {
         LOGGER.debug("Starting SnapServer with Bonsai full flat db");
         var bonsaiArchive =
             protocolContext
@@ -192,13 +195,17 @@ class SnapServer implements BesuEvents.InitialSyncCompletionListener {
 
   private void registerResponseConstructors() {
     snapMessages.registerResponseConstructor(
-        SnapV1.GET_ACCOUNT_RANGE, messageData -> constructGetAccountRangeResponse(messageData));
+        SnapV1.GET_ACCOUNT_RANGE,
+        (messageData, capability) -> constructGetAccountRangeResponse(messageData));
     snapMessages.registerResponseConstructor(
-        SnapV1.GET_STORAGE_RANGE, messageData -> constructGetStorageRangeResponse(messageData));
+        SnapV1.GET_STORAGE_RANGE,
+        (messageData, capability) -> constructGetStorageRangeResponse(messageData));
     snapMessages.registerResponseConstructor(
-        SnapV1.GET_BYTECODES, messageData -> constructGetBytecodesResponse(messageData));
+        SnapV1.GET_BYTECODES,
+        (messageData, capability) -> constructGetBytecodesResponse(messageData));
     snapMessages.registerResponseConstructor(
-        SnapV1.GET_TRIE_NODES, messageData -> constructGetTrieNodesResponse(messageData));
+        SnapV1.GET_TRIE_NODES,
+        (messageData, capability) -> constructGetTrieNodesResponse(messageData));
   }
 
   MessageData constructGetAccountRangeResponse(final MessageData message) {
@@ -522,7 +529,7 @@ class SnapServer implements BesuEvents.InitialSyncCompletionListener {
                     var trieNode = optStorage.orElse(Bytes.EMPTY);
                     if (!trieNodes.isEmpty()
                         && (sumListBytes(trieNodes) + trieNode.size() > maxResponseBytes
-                            || stopWatch.getTime()
+                            || stopWatch.getTime(TimeUnit.MILLISECONDS)
                                 > ResponseSizePredicate.MAX_MILLIS_PER_REQUEST)) {
                       break;
                     }

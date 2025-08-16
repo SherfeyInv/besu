@@ -25,8 +25,8 @@ import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.frame.MessageFrame.State;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-import org.hyperledger.besu.evm.internal.CodeCache;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
+import org.hyperledger.besu.evm.internal.JumpDestOnlyCodeCache;
 import org.hyperledger.besu.evm.internal.OverflowException;
 import org.hyperledger.besu.evm.internal.UnderflowException;
 import org.hyperledger.besu.evm.operation.AddModOperation;
@@ -34,6 +34,7 @@ import org.hyperledger.besu.evm.operation.AddOperation;
 import org.hyperledger.besu.evm.operation.AndOperation;
 import org.hyperledger.besu.evm.operation.ByteOperation;
 import org.hyperledger.besu.evm.operation.ChainIdOperation;
+import org.hyperledger.besu.evm.operation.CountLeadingZerosOperation;
 import org.hyperledger.besu.evm.operation.DivOperation;
 import org.hyperledger.besu.evm.operation.DupOperation;
 import org.hyperledger.besu.evm.operation.ExpOperation;
@@ -89,12 +90,14 @@ public class EVM {
   private final GasCalculator gasCalculator;
   private final Operation endOfScriptStop;
   private final CodeFactory codeFactory;
-  private final CodeCache codeCache;
   private final EvmConfiguration evmConfiguration;
   private final EvmSpecVersion evmSpecVersion;
 
   // Optimized operation flags
   private final boolean enableShanghai;
+  private final boolean enableOsaka;
+
+  private final JumpDestOnlyCodeCache jumpDestOnlyCodeCache;
 
   /**
    * Instantiates a new Evm.
@@ -113,8 +116,8 @@ public class EVM {
     this.gasCalculator = gasCalculator;
     this.endOfScriptStop = new VirtualOperation(new StopOperation(gasCalculator));
     this.evmConfiguration = evmConfiguration;
-    this.codeCache = new CodeCache(evmConfiguration);
     this.evmSpecVersion = evmSpecVersion;
+    this.jumpDestOnlyCodeCache = new JumpDestOnlyCodeCache(evmConfiguration);
 
     codeFactory =
         new CodeFactory(
@@ -122,6 +125,7 @@ public class EVM {
             evmConfiguration.maxInitcodeSizeOverride().orElse(evmSpecVersion.maxInitcodeSize));
 
     enableShanghai = EvmSpecVersion.SHANGHAI.ordinal() <= evmSpecVersion.ordinal();
+    enableOsaka = EvmSpecVersion.OSAKA.ordinal() <= evmSpecVersion.ordinal();
   }
 
   /**
@@ -241,7 +245,7 @@ public class EVM {
               case 0x09 -> MulModOperation.staticOperation(frame);
               case 0x0a -> ExpOperation.staticOperation(frame, gasCalculator);
               case 0x0b -> SignExtendOperation.staticOperation(frame);
-              case 0x0c, 0x0d, 0x0e, 0x0f -> InvalidOperation.INVALID_RESULT;
+              case 0x0c, 0x0d, 0x0e, 0x0f -> InvalidOperation.invalidOperationResult(opcode);
               case 0x10 -> LtOperation.staticOperation(frame);
               case 0x11 -> GtOperation.staticOperation(frame);
               case 0x12 -> SLtOperation.staticOperation(frame);
@@ -252,6 +256,10 @@ public class EVM {
               case 0x18 -> XorOperation.staticOperation(frame);
               case 0x19 -> NotOperation.staticOperation(frame);
               case 0x1a -> ByteOperation.staticOperation(frame);
+              case 0x1e ->
+                  enableOsaka
+                      ? CountLeadingZerosOperation.staticOperation(frame)
+                      : InvalidOperation.invalidOperationResult(opcode);
               case 0x50 -> PopOperation.staticOperation(frame);
               case 0x56 -> JumpOperation.staticOperation(frame);
               case 0x57 -> JumpiOperation.staticOperation(frame);
@@ -259,73 +267,73 @@ public class EVM {
               case 0x5f ->
                   enableShanghai
                       ? Push0Operation.staticOperation(frame)
-                      : InvalidOperation.INVALID_RESULT;
+                      : InvalidOperation.invalidOperationResult(opcode);
               case 0x60, // PUSH1-32
-                      0x61,
-                      0x62,
-                      0x63,
-                      0x64,
-                      0x65,
-                      0x66,
-                      0x67,
-                      0x68,
-                      0x69,
-                      0x6a,
-                      0x6b,
-                      0x6c,
-                      0x6d,
-                      0x6e,
-                      0x6f,
-                      0x70,
-                      0x71,
-                      0x72,
-                      0x73,
-                      0x74,
-                      0x75,
-                      0x76,
-                      0x77,
-                      0x78,
-                      0x79,
-                      0x7a,
-                      0x7b,
-                      0x7c,
-                      0x7d,
-                      0x7e,
-                      0x7f ->
+                  0x61,
+                  0x62,
+                  0x63,
+                  0x64,
+                  0x65,
+                  0x66,
+                  0x67,
+                  0x68,
+                  0x69,
+                  0x6a,
+                  0x6b,
+                  0x6c,
+                  0x6d,
+                  0x6e,
+                  0x6f,
+                  0x70,
+                  0x71,
+                  0x72,
+                  0x73,
+                  0x74,
+                  0x75,
+                  0x76,
+                  0x77,
+                  0x78,
+                  0x79,
+                  0x7a,
+                  0x7b,
+                  0x7c,
+                  0x7d,
+                  0x7e,
+                  0x7f ->
                   PushOperation.staticOperation(frame, code, pc, opcode - PUSH_BASE);
               case 0x80, // DUP1-16
-                      0x81,
-                      0x82,
-                      0x83,
-                      0x84,
-                      0x85,
-                      0x86,
-                      0x87,
-                      0x88,
-                      0x89,
-                      0x8a,
-                      0x8b,
-                      0x8c,
-                      0x8d,
-                      0x8e,
-                      0x8f ->
+                  0x81,
+                  0x82,
+                  0x83,
+                  0x84,
+                  0x85,
+                  0x86,
+                  0x87,
+                  0x88,
+                  0x89,
+                  0x8a,
+                  0x8b,
+                  0x8c,
+                  0x8d,
+                  0x8e,
+                  0x8f ->
                   DupOperation.staticOperation(frame, opcode - DupOperation.DUP_BASE);
               case 0x90, // SWAP1-16
-                      0x91,
-                      0x92,
-                      0x93,
-                      0x94,
-                      0x95,
-                      0x96,
-                      0x97,
-                      0x98,
-                      0x99,
-                      0x9a,
-                      0x9b,
-                      0x9c,
-                      0x9d,
-                      0x9e,
-                      0x9f ->
+                  0x91,
+                  0x92,
+                  0x93,
+                  0x94,
+                  0x95,
+                  0x96,
+                  0x97,
+                  0x98,
+                  0x99,
+                  0x9a,
+                  0x9b,
+                  0x9c,
+                  0x9d,
+                  0x9e,
+                  0x9f ->
                   SwapOperation.staticOperation(frame, opcode - SWAP_BASE);
               default -> { // unoptimized operations
                 frame.setCurrentOperation(currentOperation);
@@ -367,39 +375,41 @@ public class EVM {
   }
 
   /**
-   * Gets code.
+   * Gets or creates code instance with a cached jump destination.
    *
    * @param codeHash the code hash
    * @param codeBytes the code bytes
-   * @return the code
+   * @return the code instance with the cached jump destination
    */
-  public Code getCode(final Hash codeHash, final Bytes codeBytes) {
+  public Code getOrCreateCachedJumpDest(final Hash codeHash, final Bytes codeBytes) {
     checkNotNull(codeHash);
-    Code result = codeCache.getIfPresent(codeHash);
+
+    Code result = jumpDestOnlyCodeCache.getIfPresent(codeHash);
     if (result == null) {
-      result = getCodeUncached(codeBytes);
-      codeCache.put(codeHash, result);
+      result = wrapCode(codeBytes);
+      jumpDestOnlyCodeCache.put(codeHash, result);
     }
+
     return result;
   }
 
   /**
-   * Gets code skipping the code cache.
+   * Wraps code bytes into the correct Code object
    *
    * @param codeBytes the code bytes
-   * @return the code
+   * @return the wrapped code
    */
-  public Code getCodeUncached(final Bytes codeBytes) {
+  public Code wrapCode(final Bytes codeBytes) {
     return codeFactory.createCode(codeBytes);
   }
 
   /**
-   * Gets code for creation. Skips code cache and allows for extra data after EOF contracts.
+   * Wraps code for creation. Allows dangling data, which is not allowed in a transaction.
    *
    * @param codeBytes the code bytes
-   * @return the code
+   * @return the wrapped code
    */
-  public Code getCodeForCreation(final Bytes codeBytes) {
+  public Code wrapCodeForCreation(final Bytes codeBytes) {
     return codeFactory.createCode(codeBytes, true);
   }
 

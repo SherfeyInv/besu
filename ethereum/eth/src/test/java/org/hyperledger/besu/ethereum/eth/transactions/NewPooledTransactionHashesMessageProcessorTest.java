@@ -100,7 +100,8 @@ class NewPooledTransactionHashesMessageProcessorTest {
             transactionPool,
             transactionPoolConfiguration,
             ethContext,
-            new TransactionPoolMetrics(metricsSystem));
+            new TransactionPoolMetrics(metricsSystem),
+            false);
     when(ethContext.getScheduler()).thenReturn(ethScheduler);
   }
 
@@ -420,7 +421,7 @@ class NewPooledTransactionHashesMessageProcessorTest {
       final TransactionAnnouncement announcement = announcementList.get(list.indexOf(transaction));
       assertThat(announcement.getHash()).isEqualTo(transaction.getHash());
       assertThat(announcement.getType()).hasValue(transaction.getType());
-      assertThat(announcement.getSize()).hasValue((long) transaction.getSize());
+      assertThat(announcement.getSize()).hasValue((long) transaction.getSizeForAnnouncement());
     }
   }
 

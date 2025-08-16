@@ -16,8 +16,7 @@ package org.hyperledger.besu.ethereum.difficulty.fixed;
 
 import org.hyperledger.besu.config.GenesisConfigOptions;
 import org.hyperledger.besu.ethereum.chain.BadBlockManager;
-import org.hyperledger.besu.ethereum.core.MiningParameters;
-import org.hyperledger.besu.ethereum.core.PrivacyParameters;
+import org.hyperledger.besu.ethereum.core.MiningConfiguration;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolScheduleBuilder;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSpecAdapters;
@@ -34,10 +33,9 @@ public class FixedDifficultyProtocolSchedule {
 
   public static ProtocolSchedule create(
       final GenesisConfigOptions config,
-      final PrivacyParameters privacyParameters,
       final boolean isRevertReasonEnabled,
       final EvmConfiguration evmConfiguration,
-      final MiningParameters miningParameters,
+      final MiningConfiguration miningConfiguration,
       final BadBlockManager badBlockManager,
       final boolean isParallelTxProcessingEnabled,
       final MetricsSystem metricsSystem) {
@@ -48,10 +46,9 @@ public class FixedDifficultyProtocolSchedule {
                 0,
                 builder ->
                     builder.difficultyCalculator(FixedDifficultyCalculators.calculator(config))),
-            privacyParameters,
             isRevertReasonEnabled,
             evmConfiguration,
-            miningParameters,
+            miningConfiguration,
             badBlockManager,
             isParallelTxProcessingEnabled,
             metricsSystem)
@@ -60,36 +57,16 @@ public class FixedDifficultyProtocolSchedule {
 
   public static ProtocolSchedule create(
       final GenesisConfigOptions config,
-      final boolean isRevertReasonEnabled,
       final EvmConfiguration evmConfiguration,
-      final MiningParameters miningParameters,
+      final MiningConfiguration miningConfiguration,
       final BadBlockManager badBlockManager,
       final boolean isParallelTxProcessingEnabled,
       final MetricsSystem metricsSystem) {
     return create(
         config,
-        PrivacyParameters.DEFAULT,
-        isRevertReasonEnabled,
-        evmConfiguration,
-        miningParameters,
-        badBlockManager,
-        isParallelTxProcessingEnabled,
-        metricsSystem);
-  }
-
-  public static ProtocolSchedule create(
-      final GenesisConfigOptions config,
-      final EvmConfiguration evmConfiguration,
-      final MiningParameters miningParameters,
-      final BadBlockManager badBlockManager,
-      final boolean isParallelTxProcessingEnabled,
-      final MetricsSystem metricsSystem) {
-    return create(
-        config,
-        PrivacyParameters.DEFAULT,
         false,
         evmConfiguration,
-        miningParameters,
+        miningConfiguration,
         badBlockManager,
         isParallelTxProcessingEnabled,
         metricsSystem);

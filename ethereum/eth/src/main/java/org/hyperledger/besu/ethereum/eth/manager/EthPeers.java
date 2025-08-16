@@ -15,6 +15,7 @@
 package org.hyperledger.besu.ethereum.eth.manager;
 
 import org.hyperledger.besu.ethereum.core.BlockHeader;
+import org.hyperledger.besu.ethereum.eth.EthProtocol;
 import org.hyperledger.besu.ethereum.eth.SnapProtocol;
 import org.hyperledger.besu.ethereum.eth.manager.EthPeer.DisconnectCallback;
 import org.hyperledger.besu.ethereum.eth.manager.peertask.PeerSelector;
@@ -28,12 +29,16 @@ import org.hyperledger.besu.ethereum.forkid.ForkIdManager;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSpec;
 import org.hyperledger.besu.ethereum.p2p.peers.Peer;
 import org.hyperledger.besu.ethereum.p2p.peers.PeerId;
+import org.hyperledger.besu.ethereum.p2p.rlpx.ConnectCallback;
 import org.hyperledger.besu.ethereum.p2p.rlpx.RlpxAgent;
 import org.hyperledger.besu.ethereum.p2p.rlpx.connections.PeerConnection;
+import org.hyperledger.besu.ethereum.p2p.rlpx.wire.PeerClientName;
+import org.hyperledger.besu.ethereum.p2p.rlpx.wire.PeerInfo;
 import org.hyperledger.besu.ethereum.p2p.rlpx.wire.messages.DisconnectMessage;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.metrics.Counter;
+import org.hyperledger.besu.plugin.services.metrics.LabelledSuppliedMetric;
 import org.hyperledger.besu.plugin.services.permissioning.NodeMessagePermissioningProvider;
 import org.hyperledger.besu.util.Subscribers;
 
@@ -53,12 +58,12 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-import javax.annotation.Nonnull;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.RemovalNotification;
+import jakarta.validation.constraints.NotNull;
 import org.apache.tuweni.bytes.Bytes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -75,7 +80,7 @@ public class EthPeers implements PeerSelector {
       Comparator.comparing((final EthPeer p) -> p.getReputation().getScore())
           .thenComparing(CHAIN_HEIGHT);
 
-  public static final Comparator<EthPeer> HEAVIEST_CHAIN =
+  public static final Comparator<EthPeer> TOTAL_DIFFICULTY_THEN_HEIGHT =
       TOTAL_DIFFICULTY.thenComparing(CHAIN_HEIGHT);
 
   public static final Comparator<EthPeer> LEAST_TO_MOST_BUSY =
@@ -92,7 +97,6 @@ public class EthPeers implements PeerSelector {
           .concurrencyLevel(1)
           .removalListener(this::onCacheRemoval)
           .build();
-  private final String protocolName;
   private final Clock clock;
   private final List<NodeMessagePermissioningProvider> permissioningProviders;
   private final int maxMessageSize;
@@ -114,7 +118,6 @@ public class EthPeers implements PeerSelector {
   private RlpxAgent rlpxAgent;
 
   private final Counter connectedPeersCounter;
-  //  private List<ProtocolManager> protocolManagers;
   private ChainHeadTracker tracker;
   private SnapServerChecker snapServerChecker;
   private boolean snapServerPeersNeeded = false;
@@ -122,7 +125,6 @@ public class EthPeers implements PeerSelector {
       () -> TrailingPeerRequirements.UNRESTRICTED;
 
   public EthPeers(
-      final String protocolName,
       final Supplier<ProtocolSpec> currentProtocolSpecSupplier,
       final Clock clock,
       final MetricsSystem metricsSystem,
@@ -134,12 +136,11 @@ public class EthPeers implements PeerSelector {
       final Boolean randomPeerPriority,
       final SyncMode syncMode,
       final ForkIdManager forkIdManager) {
-    this.protocolName = protocolName;
     this.currentProtocolSpecSupplier = currentProtocolSpecSupplier;
     this.clock = clock;
     this.permissioningProviders = permissioningProviders;
     this.maxMessageSize = maxMessageSize;
-    this.bestPeerComparator = HEAVIEST_CHAIN;
+    this.bestPeerComparator = TOTAL_DIFFICULTY_THEN_HEIGHT;
     this.localNodeId = localNodeId;
     this.peerUpperBound = peerUpperBound;
     this.maxRemotelyInitiatedConnections = maxRemotelyInitiatedConnections;
@@ -175,6 +176,26 @@ public class EthPeers implements PeerSelector {
     connectedPeersCounter =
         metricsSystem.createCounter(
             BesuMetricCategory.PEERS, "connected_total", "Total number of peers connected");
+
+    final LabelledSuppliedMetric peerClientLabelledGauge =
+        metricsSystem.createLabelledSuppliedGauge(
+            BesuMetricCategory.PEERS,
+            "peer_count_by_client",
+            "The number of clients connected by client",
+            "client");
+
+    for (final var clientName : PeerClientName.values()) {
+      peerClientLabelledGauge.labels(
+          () -> countConnectedPeersByClientName(clientName), clientName.getDisplayName());
+    }
+  }
+
+  private double countConnectedPeersByClientName(final PeerClientName clientName) {
+    return streamAllActiveConnections()
+        .map(PeerConnection::getPeerInfo)
+        .map(PeerInfo::getClientName)
+        .filter(clientName::equals)
+        .count();
   }
 
   public void registerNewConnection(
@@ -191,7 +212,6 @@ public class EthPeers implements PeerSelector {
             peerInList.orElse(
                 new EthPeer(
                     newConnection,
-                    protocolName,
                     this::ethPeerStatusExchanged,
                     peerValidators,
                     maxMessageSize,
@@ -203,7 +223,7 @@ public class EthPeers implements PeerSelector {
     }
   }
 
-  @Nonnull
+  @NotNull
   private List<PeerConnection> getIncompleteConnections(final Bytes id) {
     return incompleteConnections.asMap().keySet().stream()
         .filter(nrc -> nrc.getPeer().getId().equals(id))
@@ -294,7 +314,7 @@ public class EthPeers implements PeerSelector {
   }
 
   public void dispatchMessage(final EthPeer peer, final EthMessage ethMessage) {
-    dispatchMessage(peer, ethMessage, protocolName);
+    dispatchMessage(peer, ethMessage, EthProtocol.NAME);
   }
 
   @VisibleForTesting
@@ -475,6 +495,40 @@ public class EthPeers implements PeerSelector {
         .filter(EthPeer::hasAvailableRequestCapacity)
         .filter(EthPeer::isFullyValidated)
         .min(LEAST_TO_MOST_BUSY);
+  }
+
+  // Part of the PeerSelector interface, to be split apart later
+  @Override
+  public CompletableFuture<EthPeer> waitForPeer(final Predicate<EthPeer> filter) {
+    final CompletableFuture<EthPeer> future = new CompletableFuture<>();
+    LOG.debug("Waiting for peer matching filter. {} peers currently connected.", peerCount());
+    // check for an existing peer matching the filter and use that if one is found
+    Optional<EthPeer> maybePeer = getPeer(filter);
+    if (maybePeer.isPresent()) {
+      LOG.debug("Found peer matching filter already connected!");
+      future.complete(maybePeer.get());
+    } else {
+      // no existing peer matches our filter. Subscribe to new connections until we find one
+      LOG.debug("Subscribing to new peer connections to wait until one matches filter");
+      final long subscriptionId =
+          subscribeConnect(
+              (peer) -> {
+                if (!future.isDone() && filter.test(peer)) {
+                  LOG.debug("Found new peer matching filter!");
+                  future.complete(peer);
+                } else {
+                  LOG.debug("New peer does not match filter");
+                }
+              });
+      future.handle(
+          (peer, throwable) -> {
+            LOG.debug("Unsubscribing from new peer connections with ID {}", subscriptionId);
+            unsubscribeConnect(subscriptionId);
+            return null;
+          });
+    }
+
+    return future;
   }
 
   // Part of the PeerSelector interface, to be split apart later

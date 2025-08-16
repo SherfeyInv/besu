@@ -17,11 +17,12 @@ package org.hyperledger.besu.ethereum.eth.sync.fastsync;
 import static org.hyperledger.besu.util.FutureUtils.exceptionallyCompose;
 
 import org.hyperledger.besu.ethereum.eth.manager.exceptions.MaxRetriesReachedException;
+import org.hyperledger.besu.ethereum.eth.manager.exceptions.NoAvailablePeersException;
 import org.hyperledger.besu.ethereum.eth.sync.ChainDownloader;
 import org.hyperledger.besu.ethereum.eth.sync.TrailingPeerRequirements;
 import org.hyperledger.besu.ethereum.eth.sync.worldstate.StalledDownloadException;
 import org.hyperledger.besu.ethereum.eth.sync.worldstate.WorldStateDownloader;
-import org.hyperledger.besu.ethereum.trie.diffbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.metrics.SyncDurationMetrics;
 import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
@@ -31,6 +32,7 @@ import org.hyperledger.besu.util.ExceptionUtils;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
@@ -90,8 +92,8 @@ public class FastSyncDownloader<REQUEST> {
   }
 
   protected CompletableFuture<FastSyncState> start(final FastSyncState fastSyncState) {
-    worldStateStorageCoordinator.applyOnMatchingStrategy(
-        DataStorageFormat.BONSAI,
+    worldStateStorageCoordinator.applyOnMatchingStrategies(
+        List.of(DataStorageFormat.BONSAI, DataStorageFormat.X_BONSAI_ARCHIVE),
         worldStateKeyValueStorage -> {
           BonsaiWorldStateKeyValueStorage onBonsai =
               (BonsaiWorldStateKeyValueStorage) worldStateKeyValueStorage;
@@ -132,6 +134,12 @@ public class FastSyncDownloader<REQUEST> {
       LOG.debug(
           "A download operation reached the max number of retries, re-pivoting to newer block");
       return start(FastSyncState.EMPTY_SYNC_STATE);
+    } else if (rootCause instanceof NoAvailablePeersException) {
+      LOG.debug(
+          "No peers available for sync. Restarting sync in {} seconds",
+          FAST_SYNC_RETRY_DELAY.getSeconds());
+      return fastSyncActions.scheduleFutureTask(
+          () -> start(FastSyncState.EMPTY_SYNC_STATE), FAST_SYNC_RETRY_DELAY);
     } else {
       LOG.error(
           "Encountered an unexpected error during sync. Restarting sync in "

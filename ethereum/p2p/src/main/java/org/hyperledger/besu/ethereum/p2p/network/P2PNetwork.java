@@ -117,6 +117,9 @@ public interface P2PNetwork extends Closeable {
    */
   boolean removeMaintainedConnectionPeer(final Peer peer);
 
+  /** Returns a collection of peers that are maintained connections. */
+  Collection<Peer> getMaintainedConnectionPeers();
+
   /** Stops the P2P network layer. */
   void stop();
 
@@ -145,6 +148,13 @@ public interface P2PNetwork extends Closeable {
   boolean isDiscoveryEnabled();
 
   /**
+   * Is discovery stopped?
+   *
+   * @return Return true if peer discovery is stopped.
+   */
+  boolean isStopped();
+
+  /**
    * Returns the EnodeURL used to identify this peer in the network.
    *
    * @return the enodeURL associated with this node if P2P has been enabled. Returns empty
@@ -157,5 +167,4 @@ public interface P2PNetwork extends Closeable {
   default RlpxAgent getRlpxAgent() {
     return null;
   }
-  ;
 }

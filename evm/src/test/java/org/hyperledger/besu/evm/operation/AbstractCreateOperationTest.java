@@ -37,7 +37,6 @@ import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.ConstantinopleGasCalculator;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
-import org.hyperledger.besu.evm.internal.Words;
 import org.hyperledger.besu.evm.processor.ContractCreationProcessor;
 import org.hyperledger.besu.evm.tracing.OperationTracer;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
@@ -131,7 +130,7 @@ class AbstractCreateOperationTest {
       final long inputOffset = clampedToLong(frame.getStackItem(1));
       final long inputSize = clampedToLong(frame.getStackItem(2));
       final Bytes inputData = frame.readMemory(inputOffset, inputSize);
-      return evm.getCodeUncached(inputData);
+      return evm.wrapCode(inputData);
     }
 
     @Override
@@ -164,10 +163,10 @@ class AbstractCreateOperationTest {
             .sender(Address.fromHexString(SENDER))
             .value(Wei.ZERO)
             .apparentValue(Wei.ZERO)
-            .code(evm.getCodeUncached(SIMPLE_CREATE))
+            .code(evm.wrapCode(SIMPLE_CREATE))
             .completer(__ -> {})
             .address(Address.fromHexString(SENDER))
-            .blockHashLookup(n -> Hash.hash(Words.longBytes(n)))
+            .blockHashLookup((__, ___) -> Hash.ZERO)
             .blockValues(mock(BlockValues.class))
             .gasPrice(Wei.ZERO)
             .miningBeneficiary(Address.ZERO)

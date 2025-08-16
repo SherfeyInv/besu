@@ -47,6 +47,7 @@ public class JsonGenesisConfigOptions implements GenesisConfigOptions {
   private static final String TRANSITIONS_CONFIG_KEY = "transitions";
   private static final String DISCOVERY_CONFIG_KEY = "discovery";
   private static final String CHECKPOINT_CONFIG_KEY = "checkpoint";
+  private static final String BLOB_SCHEDULE_CONFIG_KEY = "blobschedule";
   private static final String ZERO_BASE_FEE_KEY = "zerobasefee";
   private static final String FIXED_BASE_FEE_KEY = "fixedbasefee";
   private static final String WITHDRAWAL_REQUEST_CONTRACT_ADDRESS_KEY =
@@ -117,6 +118,8 @@ public class JsonGenesisConfigOptions implements GenesisConfigOptions {
       return ETHASH_CONFIG_KEY;
     } else if (isIbft2()) {
       return IBFT2_CONFIG_KEY;
+    } else if (isIbftLegacy()) {
+      return IBFT_LEGACY_CONFIG_KEY;
     } else if (isQbft()) {
       return QBFT_CONFIG_KEY;
     } else if (isClique()) {
@@ -154,6 +157,13 @@ public class JsonGenesisConfigOptions implements GenesisConfigOptions {
   @Override
   public boolean isPoa() {
     return isQbft() || isClique() || isIbft2() || isIbftLegacy();
+  }
+
+  @Override
+  public IbftLegacyConfigOptions getIbftLegacyConfigOptions() {
+    return JsonUtil.getObjectNode(configRoot, IBFT_LEGACY_CONFIG_KEY)
+        .map(IbftLegacyConfigOptions::new)
+        .orElse(IbftLegacyConfigOptions.DEFAULT);
   }
 
   @Override
@@ -197,6 +207,12 @@ public class JsonGenesisConfigOptions implements GenesisConfigOptions {
     return JsonUtil.getObjectNode(configRoot, ETHASH_CONFIG_KEY)
         .map(EthashConfigOptions::new)
         .orElse(EthashConfigOptions.DEFAULT);
+  }
+
+  @Override
+  public Optional<BlobScheduleOptions> getBlobScheduleOptions() {
+    return JsonUtil.getObjectNode(configRoot, BLOB_SCHEDULE_CONFIG_KEY)
+        .map(BlobScheduleOptions::new);
   }
 
   @Override
@@ -310,6 +326,31 @@ public class JsonGenesisConfigOptions implements GenesisConfigOptions {
   @Override
   public OptionalLong getOsakaTime() {
     return getOptionalLong("osakatime");
+  }
+
+  @Override
+  public OptionalLong getBpo1Time() {
+    return getOptionalLong("bpo1time");
+  }
+
+  @Override
+  public OptionalLong getBpo2Time() {
+    return getOptionalLong("bpo2time");
+  }
+
+  @Override
+  public OptionalLong getBpo3Time() {
+    return getOptionalLong("bpo3time");
+  }
+
+  @Override
+  public OptionalLong getBpo4Time() {
+    return getOptionalLong("bpo4time");
+  }
+
+  @Override
+  public OptionalLong getBpo5Time() {
+    return getOptionalLong("bpo5time");
   }
 
   @Override
@@ -487,6 +528,11 @@ public class JsonGenesisConfigOptions implements GenesisConfigOptions {
     getCancunEOFTime().ifPresent(l -> builder.put("cancunEOFTime", l));
     getPragueTime().ifPresent(l -> builder.put("pragueTime", l));
     getOsakaTime().ifPresent(l -> builder.put("osakaTime", l));
+    getBpo1Time().ifPresent(l -> builder.put("bpo1Time", l));
+    getBpo2Time().ifPresent(l -> builder.put("bpo2Time", l));
+    getBpo3Time().ifPresent(l -> builder.put("bpo3Time", l));
+    getBpo4Time().ifPresent(l -> builder.put("bpo4Time", l));
+    getBpo5Time().ifPresent(l -> builder.put("bpo5Time", l));
     getTerminalBlockNumber().ifPresent(l -> builder.put("terminalBlockNumber", l));
     getTerminalBlockHash().ifPresent(h -> builder.put("terminalBlockHash", h.toHexString()));
     getFutureEipsTime().ifPresent(l -> builder.put("futureEipsTime", l));
@@ -522,6 +568,9 @@ public class JsonGenesisConfigOptions implements GenesisConfigOptions {
     if (isEthHash()) {
       builder.put("ethash", getEthashConfigOptions().asMap());
     }
+    if (isIbftLegacy()) {
+      builder.put("ibft", getIbftLegacyConfigOptions().asMap());
+    }
     if (isIbft2()) {
       builder.put("ibft2", getBftConfigOptions().asMap());
     }
@@ -535,6 +584,10 @@ public class JsonGenesisConfigOptions implements GenesisConfigOptions {
 
     if (isFixedBaseFee()) {
       builder.put("fixedBaseFee", true);
+    }
+
+    if (getBlobScheduleOptions().isPresent()) {
+      builder.put("blobSchedule", getBlobScheduleOptions().get().asMap());
     }
 
     return builder.build();
@@ -641,6 +694,11 @@ public class JsonGenesisConfigOptions implements GenesisConfigOptions {
             getCancunEOFTime(),
             getPragueTime(),
             getOsakaTime(),
+            getBpo1Time(),
+            getBpo2Time(),
+            getBpo3Time(),
+            getBpo4Time(),
+            getBpo5Time(),
             getFutureEipsTime(),
             getExperimentalEipsTime());
     // when adding forks add an entry to ${REPO_ROOT}/config/src/test/resources/all_forks.json

@@ -15,7 +15,7 @@
 package org.hyperledger.besu.ethereum.mainnet;
 
 import org.hyperledger.besu.ethereum.chain.PoWObserver;
-import org.hyperledger.besu.ethereum.core.MiningParameters;
+import org.hyperledger.besu.ethereum.core.MiningConfiguration;
 import org.hyperledger.besu.util.Subscribers;
 
 import java.util.Optional;
@@ -34,7 +34,7 @@ public class PoWSolver {
 
   private static final Logger LOG = LoggerFactory.getLogger(PoWSolver.class);
 
-  private final MiningParameters miningParameters;
+  private final MiningConfiguration miningConfiguration;
 
   public static class PoWSolverJob {
 
@@ -79,22 +79,17 @@ public class PoWSolver {
 
   private final PoWHasher poWHasher;
   private volatile long hashesPerSecond = NO_MINING_CONDUCTED;
-  private final Boolean stratumMiningEnabled;
-  private final Subscribers<PoWObserver> ethHashObservers;
   private final EpochCalculator epochCalculator;
   private volatile Optional<PoWSolverJob> currentJob = Optional.empty();
   private final ExpiringMap<Bytes, PoWSolverJob> currentJobs = new ExpiringMap<>();
 
   public PoWSolver(
-      final MiningParameters miningParameters,
+      final MiningConfiguration miningConfiguration,
       final PoWHasher poWHasher,
-      final Boolean stratumMiningEnabled,
       final Subscribers<PoWObserver> ethHashObservers,
       final EpochCalculator epochCalculator) {
-    this.miningParameters = miningParameters;
+    this.miningConfiguration = miningConfiguration;
     this.poWHasher = poWHasher;
-    this.stratumMiningEnabled = stratumMiningEnabled;
-    this.ethHashObservers = ethHashObservers;
     ethHashObservers.forEach(observer -> observer.setSubmitWorkCallback(this::submitSolution));
     this.epochCalculator = epochCalculator;
   }
@@ -105,15 +100,9 @@ public class PoWSolver {
     currentJobs.put(
         job.getInputs().getPrePowHash(),
         job,
-        System.currentTimeMillis() + miningParameters.getUnstable().getPowJobTimeToLive());
-    if (stratumMiningEnabled) {
-      LOG.debug(
-          "solving with stratum miner for {} observers", ethHashObservers.getSubscriberCount());
-      ethHashObservers.forEach(observer -> observer.newJob(job.inputs));
-    } else {
-      LOG.debug("solving with cpu miner");
-      findValidNonce();
-    }
+        System.currentTimeMillis() + miningConfiguration.getUnstable().getPowJobTimeToLive());
+    LOG.debug("solving with cpu miner");
+    findValidNonce();
     return job.getSolution();
   }
 
@@ -121,7 +110,7 @@ public class PoWSolver {
     final Stopwatch operationTimer = Stopwatch.createStarted();
     final PoWSolverJob job = currentJob.get();
     long hashesExecuted = 0;
-    for (final Long n : miningParameters.getNonceGenerator().get()) {
+    for (final Long n : miningConfiguration.getNonceGenerator().get()) {
 
       if (job.isDone()) {
         return;
@@ -181,7 +170,7 @@ public class PoWSolver {
             solution.getPowHash(),
             ommerCandidate.getInputs().getBlockNumber(),
             distanceToHead);
-        if (distanceToHead <= miningParameters.getUnstable().getMaxOmmerDepth()) {
+        if (distanceToHead <= miningConfiguration.getUnstable().getMaxOmmerDepth()) {
           jobToTestWith = ommerCandidate;
         } else {
           LOG.debug("Discarded ommer solution as too far from head {}", distanceToHead);
@@ -211,6 +200,6 @@ public class PoWSolver {
   }
 
   public Iterable<Long> getNonceGenerator() {
-    return miningParameters.getNonceGenerator().get();
+    return miningConfiguration.getNonceGenerator().get();
   }
 }

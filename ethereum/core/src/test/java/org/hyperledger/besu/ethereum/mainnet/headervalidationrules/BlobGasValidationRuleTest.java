@@ -19,27 +19,60 @@ import static org.assertj.core.api.Assertions.assertThat;
 import org.hyperledger.besu.datatypes.BlobGas;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
+import org.hyperledger.besu.ethereum.mainnet.CancunTargetingGasLimitCalculator;
+import org.hyperledger.besu.ethereum.mainnet.feemarket.FeeMarket;
 import org.hyperledger.besu.evm.gascalculator.CancunGasCalculator;
+import org.hyperledger.besu.evm.gascalculator.PragueGasCalculator;
+
+import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /** Tests for the {@link BlobGasValidationRule} class. */
 public class BlobGasValidationRuleTest {
+  private static final int MAX_BLOBS_PER_BLOCK = 6;
+  private static final int TARGET_BLOBS_PER_BLOCK = 3;
+  private CancunGasCalculator cancunGasCalculator;
+  private BlobGasValidationRule cancunBlobGasValidationRule;
+  private CancunTargetingGasLimitCalculator cancunTargetingGasLimitCalculator;
 
-  private CancunGasCalculator gasCalculator;
-  private BlobGasValidationRule blobGasValidationRule;
+  private PragueGasCalculator pragueGasCalculator;
+  private BlobGasValidationRule pragueBlobGasValidationRule;
+  private CancunTargetingGasLimitCalculator pragueGasLimitCalculator;
 
   @BeforeEach
   public void setUp() {
-    gasCalculator = new CancunGasCalculator();
-    blobGasValidationRule = new BlobGasValidationRule(gasCalculator);
+    cancunGasCalculator = new CancunGasCalculator();
+    cancunTargetingGasLimitCalculator =
+        new CancunTargetingGasLimitCalculator(
+            0L,
+            FeeMarket.cancunDefault(0L, Optional.empty()),
+            cancunGasCalculator,
+            MAX_BLOBS_PER_BLOCK,
+            TARGET_BLOBS_PER_BLOCK);
+    cancunBlobGasValidationRule =
+        new BlobGasValidationRule(cancunGasCalculator, cancunTargetingGasLimitCalculator);
+
+    pragueGasCalculator = new PragueGasCalculator();
+    pragueGasLimitCalculator =
+        new CancunTargetingGasLimitCalculator(
+            0L,
+            FeeMarket.cancunDefault(0L, Optional.empty()),
+            pragueGasCalculator,
+            MAX_BLOBS_PER_BLOCK,
+            TARGET_BLOBS_PER_BLOCK);
+    pragueBlobGasValidationRule =
+        new BlobGasValidationRule(pragueGasCalculator, pragueGasLimitCalculator);
   }
 
-  /** Tests that the header blob gas matches the calculated blob gas and passes validation. */
+  /**
+   * Cancun EIP-4844 - Tests that the header blob gas matches the calculated blob gas and passes
+   * validation.
+   */
   @Test
   public void validateHeader_BlobGasMatchesCalculated_SuccessValidation() {
-    long target = gasCalculator.getTargetBlobGasPerBlock();
+    long target = cancunTargetingGasLimitCalculator.getTargetBlobGasPerBlock();
 
     // Create parent header
     final BlockHeaderTestFixture parentBuilder = new BlockHeaderTestFixture();
@@ -52,15 +85,16 @@ public class BlobGasValidationRuleTest {
     headerBuilder.excessBlobGas(BlobGas.of(1L));
     final BlockHeader header = headerBuilder.buildHeader();
 
-    assertThat(blobGasValidationRule.validate(header, parentHeader)).isTrue();
+    assertThat(cancunBlobGasValidationRule.validate(header, parentHeader)).isTrue();
   }
 
   /**
-   * Tests that the header blob gas is different from the calculated blob gas and fails validation.
+   * Cancun EIP-4844 - Tests that the header blob gas is different from the calculated blob gas and
+   * fails validation.
    */
   @Test
   public void validateHeader_BlobGasDifferentFromCalculated_FailsValidation() {
-    long target = gasCalculator.getTargetBlobGasPerBlock();
+    long target = cancunTargetingGasLimitCalculator.getTargetBlobGasPerBlock();
 
     // Create parent header
     final BlockHeaderTestFixture parentBuilder = new BlockHeaderTestFixture();
@@ -72,6 +106,49 @@ public class BlobGasValidationRuleTest {
     final BlockHeaderTestFixture headerBuilder = new BlockHeaderTestFixture();
     final BlockHeader header = headerBuilder.buildHeader();
 
-    assertThat(blobGasValidationRule.validate(header, parentHeader)).isFalse();
+    assertThat(cancunBlobGasValidationRule.validate(header, parentHeader)).isFalse();
+  }
+
+  /**
+   * Prague EIP-7840 - Tests that the header blob gas matches the calculated blob gas and passes
+   * validation.
+   */
+  @Test
+  public void validateHeader_BlobGasMatchesCalculated_SuccessValidation_Prague() {
+    long target = pragueGasLimitCalculator.getTargetBlobGasPerBlock();
+
+    // Create parent header
+    final BlockHeaderTestFixture parentBuilder = new BlockHeaderTestFixture();
+    parentBuilder.excessBlobGas(BlobGas.of(1L));
+    parentBuilder.blobGasUsed(target);
+    final BlockHeader parentHeader = parentBuilder.buildHeader();
+
+    // Create block header with matching excessBlobGas
+    final BlockHeaderTestFixture headerBuilder = new BlockHeaderTestFixture();
+    headerBuilder.excessBlobGas(BlobGas.of(1L));
+    final BlockHeader header = headerBuilder.buildHeader();
+
+    assertThat(pragueBlobGasValidationRule.validate(header, parentHeader)).isTrue();
+  }
+
+  /**
+   * Prague EIP-7840 - Tests that the header blob gas is different from the calculated blob gas and
+   * fails validation.
+   */
+  @Test
+  public void validateHeader_BlobGasDifferentFromCalculated_FailsValidation_Prague() {
+    long target = pragueGasLimitCalculator.getTargetBlobGasPerBlock();
+
+    // Create parent header
+    final BlockHeaderTestFixture parentBuilder = new BlockHeaderTestFixture();
+    parentBuilder.excessBlobGas(BlobGas.of(1L));
+    parentBuilder.blobGasUsed(target);
+    final BlockHeader parentHeader = parentBuilder.buildHeader();
+
+    // Create block header with different excessBlobGas
+    final BlockHeaderTestFixture headerBuilder = new BlockHeaderTestFixture();
+    final BlockHeader header = headerBuilder.buildHeader();
+
+    assertThat(pragueBlobGasValidationRule.validate(header, parentHeader)).isFalse();
   }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright contributors to Hyperledger Besu.
+ * Copyright contributors to Besu.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
@@ -22,9 +22,9 @@ import static org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods.Executi
 import static org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods.ExecutionEngineJsonRpcMethod.EngineStatus.VALID;
 import static org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods.engine.RequestValidatorProvider.getRequestsValidator;
 import static org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods.engine.WithdrawalsValidatorProvider.getWithdrawalsValidator;
+import static org.hyperledger.besu.metrics.BesuMetricCategory.BLOCK_PROCESSING;
 
 import org.hyperledger.besu.consensus.merge.blockcreation.MergeMiningCoordinator;
-import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.BlobGas;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.RequestType;
@@ -62,6 +62,7 @@ import org.hyperledger.besu.ethereum.mainnet.ValidationResult;
 import org.hyperledger.besu.ethereum.mainnet.feemarket.ExcessBlobGasCalculator;
 import org.hyperledger.besu.ethereum.rlp.RLPException;
 import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
+import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.exception.StorageException;
 
 import java.security.InvalidParameterException;
@@ -70,7 +71,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 import io.vertx.core.Vertx;
 import io.vertx.core.json.Json;
@@ -86,6 +86,7 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
   private static final BlockHeaderFunctions headerFunctions = new MainnetBlockHeaderFunctions();
   private final MergeMiningCoordinator mergeCoordinator;
   private final EthPeers ethPeers;
+  private long lastExecutionTime = 0L;
 
   public AbstractEngineNewPayload(
       final Vertx vertx,
@@ -93,16 +94,21 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
       final ProtocolContext protocolContext,
       final MergeMiningCoordinator mergeCoordinator,
       final EthPeers ethPeers,
-      final EngineCallListener engineCallListener) {
+      final EngineCallListener engineCallListener,
+      final MetricsSystem metricsSystem) {
     super(vertx, protocolSchedule, protocolContext, engineCallListener);
     this.mergeCoordinator = mergeCoordinator;
     this.ethPeers = ethPeers;
+    metricsSystem.createLongGauge(
+        BLOCK_PROCESSING,
+        "execution_time_head",
+        "The execution time of the last block (head)",
+        this::getLastExecutionTime);
   }
 
   @Override
   public JsonRpcResponse syncResponse(final JsonRpcRequestContext requestContext) {
     engineCallListener.executionEngineCalled();
-
     final EnginePayloadParameter blockParam;
     try {
       blockParam = requestContext.getRequiredParameter(0, EnginePayloadParameter.class);
@@ -147,6 +153,12 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
           e);
     }
 
+    final ValidationResult<RpcErrorType> forkValidationResult =
+        validateForkSupported(blockParam.getTimestamp());
+    if (!forkValidationResult.isValid()) {
+      return new JsonRpcErrorResponse(reqId, forkValidationResult);
+    }
+
     final ValidationResult<RpcErrorType> parameterValidationResult =
         validateParameters(
             blockParam,
@@ -157,17 +169,11 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
       return new JsonRpcErrorResponse(reqId, parameterValidationResult);
     }
 
-    final ValidationResult<RpcErrorType> forkValidationResult =
-        validateForkSupported(blockParam.getTimestamp());
-    if (!forkValidationResult.isValid()) {
-      return new JsonRpcErrorResponse(reqId, forkValidationResult);
-    }
-
     final Optional<List<VersionedHash>> maybeVersionedHashes;
     try {
       maybeVersionedHashes = extractVersionedHashes(maybeVersionedHashParam);
     } catch (RuntimeException ex) {
-      return respondWithInvalid(
+      return respondWithError(
           reqId,
           blockParam,
           mergeCoordinator.getLatestValidAncestor(blockParam.getParentHash()).orElse(null),
@@ -196,13 +202,15 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
     final Optional<List<Request>> maybeRequests;
     try {
       maybeRequests = extractRequests(maybeRequestsParam);
-    } catch (RuntimeException ex) {
-      return respondWithInvalid(
+    } catch (RequestType.InvalidRequestTypeException ex) {
+      return respondWithError(
           reqId,
           blockParam,
           mergeCoordinator.getLatestValidAncestor(blockParam.getParentHash()).orElse(null),
           INVALID,
           "Invalid execution requests");
+    } catch (Exception ex) {
+      return new JsonRpcErrorResponse(reqId, RpcErrorType.INVALID_EXECUTION_REQUESTS_PARAMS);
     }
 
     if (!getRequestsValidator(
@@ -222,20 +230,8 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
           blockParam.getTransactions().stream()
               .map(Bytes::fromHexString)
               .map(in -> TransactionDecoder.decodeOpaqueBytes(in, EncodingContext.BLOCK_BODY))
-              .collect(Collectors.toList());
-      transactions.forEach(
-          transaction ->
-              mergeCoordinator
-                  .getEthScheduler()
-                  .scheduleTxWorkerTask(
-                      () -> {
-                        Address sender = transaction.getSender();
-                        LOG.atTrace()
-                            .setMessage("The sender for transaction {} is calculated : {}")
-                            .addArgument(transaction::getHash)
-                            .addArgument(sender)
-                            .log();
-                      }));
+              .toList();
+      precomputeSenders(transactions);
     } catch (final RLPException | IllegalArgumentException e) {
       return respondWithInvalid(
           reqId,
@@ -279,7 +275,6 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
                 : BlobGas.fromHexString(blockParam.getExcessBlobGas()),
             maybeParentBeaconBlockRoot.orElse(null),
             maybeRequests.map(BodyValidation::requestsHash).orElse(null),
-            null, // TODO SLD EIP-7742 wiring in future PR
             headerFunctions);
 
     // ensure the block hash matches the blockParam hash
@@ -290,6 +285,15 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
               "Computed block hash %s does not match block hash parameter %s",
               newBlockHeader.getBlockHash(), blockParam.getBlockHash());
       LOG.debug(errorMessage);
+      // If the block is invalid, we want to return INVALID
+      // from the spec:
+      // https://github.com/ethereum/execution-apis/blob/main/src/engine/prague.md#engine_newpayloadv4
+      // Given the executionRequests, client software MUST compute the execution requests commitment
+      // and incorporate it into the blockHash validation process.
+      // That is, if the computed commitment does not match the corresponding commitment in the
+      // execution layer block header,
+      // the call MUST return {status: INVALID, latestValidHash: null, validationError: errorMessage
+      // | null}.
       return respondWithInvalid(reqId, blockParam, null, getInvalidBlockHashStatus(), errorMessage);
     }
 
@@ -304,7 +308,7 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
             maybeVersionedHashes,
             protocolSchedule.get().getByBlockHeader(newBlockHeader));
     if (!blobValidationResult.isValid()) {
-      return respondWithInvalid(
+      return respondWithError(
           reqId,
           blockParam,
           mergeCoordinator.getLatestValidAncestor(blockParam.getParentHash()).orElse(null),
@@ -331,7 +335,7 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
     if (maybeParentHeader.isPresent()
         && (Long.compareUnsigned(maybeParentHeader.get().getTimestamp(), blockParam.getTimestamp())
             >= 0)) {
-      return respondWithInvalid(
+      return respondWithError(
           reqId,
           blockParam,
           mergeCoordinator.getLatestValidAncestor(blockParam.getParentHash()).orElse(null),
@@ -361,8 +365,8 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
     // execute block and return result response
     final long startTimeMs = System.currentTimeMillis();
     final BlockProcessingResult executionResult = mergeCoordinator.rememberBlock(block);
-
     if (executionResult.isSuccessful()) {
+      lastExecutionTime = System.currentTimeMillis() - startTimeMs;
       logImportedBlockInfo(
           block,
           blobTransactions.stream()
@@ -370,15 +374,15 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
               .flatMap(Optional::stream)
               .mapToInt(List::size)
               .sum(),
-          (System.currentTimeMillis() - startTimeMs) / 1000.0);
+          lastExecutionTime / 1000.0,
+          executionResult.getNbParallelizedTransactions());
       return respondWith(reqId, blockParam, newBlockHeader.getHash(), VALID);
     } else {
       if (executionResult.causedBy().isPresent()) {
         Throwable causedBy = executionResult.causedBy().get();
         if (causedBy instanceof StorageException || causedBy instanceof MerkleTrieException) {
           RpcErrorType error = RpcErrorType.INTERNAL_ERROR;
-          JsonRpcErrorResponse response = new JsonRpcErrorResponse(reqId, error);
-          return response;
+          return new JsonRpcErrorResponse(reqId, error);
         }
       }
       LOG.debug("New payload is invalid: {}", executionResult.errorMessage.get());
@@ -388,6 +392,47 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
           latestValidAncestor.get(),
           INVALID,
           executionResult.errorMessage.get());
+    }
+  }
+
+  private void precomputeSenders(final List<Transaction> transactions) {
+    transactions.forEach(
+        transaction -> {
+          mergeCoordinator
+              .getEthScheduler()
+              .scheduleTxWorkerTask(
+                  () -> {
+                    final var sender = transaction.getSender();
+                    LOG.atTrace()
+                        .setMessage("The sender for transaction {} is calculated : {}")
+                        .addArgument(transaction::getHash)
+                        .addArgument(sender)
+                        .log();
+                  });
+          if (transaction.getType().supportsDelegateCode()) {
+            precomputeAuthorities(transaction);
+          }
+        });
+  }
+
+  private void precomputeAuthorities(final Transaction transaction) {
+    final var codeDelegations = transaction.getCodeDelegationList().get();
+    int index = 0;
+    for (final var codeDelegation : codeDelegations) {
+      final var constIndex = index++;
+      mergeCoordinator
+          .getEthScheduler()
+          .scheduleTxWorkerTask(
+              () -> {
+                final var authority = codeDelegation.authorizer();
+                LOG.atTrace()
+                    .setMessage(
+                        "The code delegation authority at index {} for transaction {} is calculated : {}")
+                    .addArgument(constIndex)
+                    .addArgument(transaction::getHash)
+                    .addArgument(authority)
+                    .log();
+              });
     }
   }
 
@@ -419,7 +464,7 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
   JsonRpcResponse respondWithInvalid(
       final Object requestId,
       final EnginePayloadParameter param,
-      final Hash latestValidHash,
+      final Hash latestValidHash, // this should be null for invalid
       final EngineStatus invalidStatus,
       final String validationError) {
     if (!INVALID.equals(invalidStatus) && !INVALID_BLOCK_HASH.equals(invalidStatus)) {
@@ -448,6 +493,36 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
             invalidStatus, latestValidHash, Optional.of(validationError)));
   }
 
+  JsonRpcResponse respondWithError(
+      final Object requestId,
+      final EnginePayloadParameter param,
+      final Hash latestValidHash,
+      final EngineStatus invalidStatus,
+      final String validationError) {
+    if (!INVALID.equals(invalidStatus) && !INVALID_BLOCK_HASH.equals(invalidStatus)) {
+      throw new IllegalArgumentException(
+          "Don't call respondWithError() with non-invalid status of " + invalidStatus.toString());
+    }
+    final String invalidBlockLogMessage =
+        String.format(
+            "Invalid new payload: number: %s, hash: %s, parentHash: %s, latestValidHash: %s, status: %s, validationError: %s",
+            param.getBlockNumber(),
+            param.getBlockHash(),
+            param.getParentHash(),
+            latestValidHash == null ? null : latestValidHash.toHexString(),
+            invalidStatus.name(),
+            validationError);
+    // always log invalid at DEBUG
+    LOG.debug(invalidBlockLogMessage);
+    // periodically log at WARN
+    if (lastInvalidWarn + ENGINE_API_LOGGING_THRESHOLD < System.currentTimeMillis()) {
+      lastInvalidWarn = System.currentTimeMillis();
+      LOG.warn(invalidBlockLogMessage);
+    }
+    // return ErrorResponse
+    return new JsonRpcErrorResponse(requestId, RpcErrorType.INVALID_ENGINE_PARAMS);
+  }
+
   protected EngineStatus getInvalidBlockHashStatus() {
     return INVALID;
   }
@@ -474,6 +549,12 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
       if (versionedHashes.isEmpty()) {
         return ValidationResult.invalid(
             RpcErrorType.INVALID_BLOB_COUNT, "There must be at least one blob");
+      }
+      if (protocolSpec.getGasCalculator().blobGasCost(versionedHashes.get().size())
+          > protocolSpec.getGasLimitCalculator().transactionBlobGasLimitCap()) {
+        return ValidationResult.invalid(
+            RpcErrorType.INVALID_BLOB_COUNT,
+            String.format("Blob transaction has too many blobs: %d", versionedHashes.get().size()));
       }
       transactionVersionedHashes.addAll(versionedHashes.get());
     }
@@ -556,34 +637,59 @@ public abstract class AbstractEngineNewPayload extends ExecutionEngineJsonRpcMet
     if (maybeRequestsParam.isEmpty()) {
       return Optional.empty();
     }
-
     return maybeRequestsParam.map(
         requests ->
-            IntStream.range(0, requests.size())
-                .mapToObj(i -> new Request(RequestType.of(i), Bytes.fromHexString(requests.get(i))))
+            requests.stream()
+                .map(
+                    s -> {
+                      final Bytes request = Bytes.fromHexString(s);
+                      final Bytes requestData = request.slice(1);
+                      if (requestData.isEmpty()) {
+                        throw new IllegalArgumentException("Request data cannot be empty");
+                      }
+                      return new Request(RequestType.of(request.get(0)), requestData);
+                    })
                 .collect(Collectors.toList()));
   }
 
-  private void logImportedBlockInfo(final Block block, final int blobCount, final double timeInS) {
+  private void logImportedBlockInfo(
+      final Block block,
+      final int blobCount,
+      final double timeInS,
+      final Optional<Integer> nbParallelizedTransactions) {
     final StringBuilder message = new StringBuilder();
-    message.append("Imported #%,d / %d tx");
+    final int nbTransactions = block.getBody().getTransactions().size();
+    message.append("Imported #%,d  (%s)| %4d tx");
     final List<Object> messageArgs =
         new ArrayList<>(
-            List.of(block.getHeader().getNumber(), block.getBody().getTransactions().size()));
+            List.of(
+                block.getHeader().getNumber(), block.getHash().toShortLogString(), nbTransactions));
+    if (nbParallelizedTransactions.isPresent()) {
+      double parallelizedTxPercentage =
+          (double) (nbParallelizedTransactions.get() * 100) / nbTransactions;
+      message.append(" (%5.1f%% parallel)");
+      messageArgs.add(parallelizedTxPercentage);
+    }
     if (block.getBody().getWithdrawals().isPresent()) {
-      message.append(" / %d ws");
+      message.append("| %2d ws");
       messageArgs.add(block.getBody().getWithdrawals().get().size());
     }
-    message.append(" / %d blobs / base fee %s / %,d (%01.1f%%) gas / (%s) in %01.3fs. Peers: %d");
+    double mgasPerSec = (timeInS != 0) ? block.getHeader().getGasUsed() / (timeInS * 1_000_000) : 0;
+    message.append(
+        "| %2d blobs| %s bfee| %,11d (%5.1f%%) gas used| %01.3fs exec| %6.2f Mgas/s| %2d peers");
     messageArgs.addAll(
         List.of(
             blobCount,
-            block.getHeader().getBaseFee().map(Wei::toHumanReadableString).orElse("N/A"),
+            block.getHeader().getBaseFee().map(Wei::toHumanReadablePaddedString).orElse("N/A"),
             block.getHeader().getGasUsed(),
             (block.getHeader().getGasUsed() * 100.0) / block.getHeader().getGasLimit(),
-            block.getHash().toHexString(),
             timeInS,
+            mgasPerSec,
             ethPeers.peerCount()));
     LOG.info(String.format(message.toString(), messageArgs.toArray()));
+  }
+
+  private long getLastExecutionTime() {
+    return this.lastExecutionTime;
   }
 }

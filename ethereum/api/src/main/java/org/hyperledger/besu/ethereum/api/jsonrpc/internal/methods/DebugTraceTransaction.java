@@ -75,12 +75,16 @@ public class DebugTraceTransaction implements JsonRpcMethod {
             "Invalid transaction trace parameter (index 1)",
             RpcErrorType.INVALID_TRANSACTION_TRACE_PARAMS,
             e);
+      } catch (IllegalArgumentException e) {
+        // Handle invalid tracer type from TracerType.fromString()
+        throw new InvalidJsonRpcParameters(
+            e.getMessage(), RpcErrorType.INVALID_TRANSACTION_TRACE_PARAMS, e);
       }
-      final DebugTraceTransactionResult debugTraceTransactionResult =
+      final DebugTraceTransactionResult debugResult =
           debugTraceTransactionResult(hash, transactionWithMetadata.get(), traceOptions);
 
       return new JsonRpcSuccessResponse(
-          requestContext.getRequest().getId(), debugTraceTransactionResult);
+          requestContext.getRequest().getId(), debugResult.getResult());
     } else {
       return new JsonRpcSuccessResponse(requestContext.getRequest().getId(), null);
     }
@@ -92,7 +96,8 @@ public class DebugTraceTransaction implements JsonRpcMethod {
       final TraceOptions traceOptions) {
     final Hash blockHash = transactionWithMetadata.getBlockHash().get();
 
-    final DebugOperationTracer execTracer = new DebugOperationTracer(traceOptions, true);
+    final DebugOperationTracer execTracer =
+        new DebugOperationTracer(traceOptions.opCodeTracerConfig(), true);
 
     return Tracer.processTracing(
             blockchain,
@@ -100,7 +105,7 @@ public class DebugTraceTransaction implements JsonRpcMethod {
             mutableWorldState ->
                 transactionTracer
                     .traceTransaction(mutableWorldState, blockHash, hash, execTracer)
-                    .map(DebugTraceTransactionResult::new))
+                    .map(DebugTraceTransactionStepFactory.create(traceOptions.tracerType())))
         .orElse(null);
   }
 }
